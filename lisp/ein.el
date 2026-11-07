@@ -49,6 +49,11 @@
   (add-to-list 'mouse-buffer-menu-mode-groups
                '("^ein:" . "ein")))
 
+;; A package install loads ein-autoloads.el at activation; a clone on
+;; `load-path' does not, so `(require 'ein)' leaves `ein:login' and
+;; `ein:run' undefined.  Load it here when `make autoloads' made it.
+(require 'ein-autoloads nil t)
+
 (provide 'ein)
 
 ;;; ein.el ends here

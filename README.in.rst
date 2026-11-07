@@ -59,6 +59,11 @@ Load EIN from a local clone, ahead of any installed copy::
 
 Confirm with ``M-: (locate-library "ein")``, which must point into the clone.
 
+Run ``make autoloads`` once after cloning, and again after a pull that adds
+commands.  It writes the git-ignored ``lisp/ein-autoloads.el``, which
+``(require 'ein)`` loads; without it ``M-x ein:login`` and ``M-x ein:run``
+are undefined.
+
 Do not leave ``.elc`` files in ``lisp/``: they shadow edited sources.
 ``make test-compile`` compiles copies in ``.build/``.  If you do compile in
 place, set ``load-prefer-newer`` to ``t``.

@@ -40,7 +40,7 @@ README.rst: cask README.in.rst lisp/ein.el lisp/ein-notebook.el
 
 .PHONY: autoloads
 autoloads:
-	$(CASK) emacs -Q --batch -l package --eval "(let ((v (format \"%s.%s\" emacs-major-version emacs-minor-version))) (custom-set-variables (backquote (package-user-dir ,(concat \".cask/\" v)))))" -f package-initialize --eval "(package-generate-autoloads \"ein\" \"./lisp\")"
+	$(EMACS) -Q --batch -l package --eval "(package-generate-autoloads \"ein\" \"./lisp\")"
 
 .PHONY: clean
 clean:

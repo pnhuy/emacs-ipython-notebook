@@ -125,6 +125,7 @@ Run from the notebook buffer's `kill-buffer-hook'."
 ;;; Languages
 
 (defun ein:nbview--nonempty (value)
+  "Return VALUE when it is a non-empty string, else nil."
   (and (stringp value) (not (string-empty-p value)) value))
 
 (defun ein:nbview--notebook-language (&optional notebook)

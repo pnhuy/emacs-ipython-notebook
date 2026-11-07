@@ -300,7 +300,7 @@ Keys: `:latex', and `:svg' (dvisvgm) or `:png' (dvipng).")
   (create-image file type nil :ascent 'center :scale ein:latex-scale))
 
 (defun ein:latex--with-image (text file type)
-  "TEXT displayed as the image in FILE."
+  "Return TEXT displayed as the image in FILE of image TYPE."
   (propertize text 'display (ein:latex--image file type)))
 
 (defun ein:latex-render (formula display callback &optional owner)

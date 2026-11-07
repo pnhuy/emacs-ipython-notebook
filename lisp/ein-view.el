@@ -74,32 +74,34 @@
   "Return the cells of VIEW in display order (buffer order for nbview).")
 
 (cl-defgeneric ein:view-cell-text (view cell)
-  "Return CELL's current source text (from the buffer region in nbview).")
+  "Return CELL's current source text in VIEW.
+In the cells view the text comes from the buffer region.")
 
 (cl-defgeneric ein:view-cell-outputs-changed (view cell &optional output-index)
-  "Re-render CELL's outputs.  Must not touch other cells or the undo list.
-OUTPUT-INDEX, when non-nil, is the index of the output just appended.")
+  "Re-render CELL's outputs in VIEW.
+Must not touch other cells or the undo list.  OUTPUT-INDEX, when
+non-nil, is the index of the output just appended.")
 
 (cl-defgeneric ein:view-cell-status-changed (view cell)
-  "Update CELL's prompt/execution-count/running indicator.")
+  "Update CELL's prompt, execution count and running indicator in VIEW.")
 
 (cl-defgeneric ein:view-insert-cell (view cell &optional after-cell)
-  "Insert CELL after AFTER-CELL (or at top).  Undoable in nbview.")
+  "Insert CELL in VIEW after AFTER-CELL (or at top).  Undoable in nbview.")
 
 (cl-defgeneric ein:view-delete-cell (view cell)
-  "Remove CELL.  Undoable in nbview.")
+  "Remove CELL from VIEW.  Undoable in nbview.")
 
 (cl-defgeneric ein:view-move-cell (view cell direction)
-  "Move CELL `up' or `down' as one undo group.")
+  "Move CELL in VIEW in DIRECTION, `up' or `down', as one undo group.")
 
 (cl-defgeneric ein:view-replace-cell (view old new)
-  "Replace OLD by NEW (type conversion) as one undo group.")
+  "Replace OLD by NEW in VIEW (type conversion) as one undo group.")
 
 (cl-defgeneric ein:view-select-cell (view cell)
-  "Select CELL; update only the old and new cell decorations.")
+  "Select CELL in VIEW; update only the old and new cell decorations.")
 
 (cl-defgeneric ein:view-kernel-status-changed (view kernel)
-  "Update toolbar/mode-line status for KERNEL."
+  "Update VIEW's toolbar and mode-line status for KERNEL."
   (ignore view kernel))
 
 ;; Internal helpers used by the model (not in the contract's list).
@@ -108,11 +110,12 @@ OUTPUT-INDEX, when non-nil, is the index of the output just appended.")
   "Return VIEW's buffer, or nil when it has none.")
 
 (cl-defgeneric ein:view-set-cell-text (view cell text)
-  "Replace CELL's source with TEXT.")
+  "Replace CELL's source in VIEW with TEXT.")
 
 ;;; Classic view: delegate to the ewoc code.
 
 (cl-defmethod ein:view-buffer ((view ein:classic-view))
+  "Return the ewoc buffer of classic VIEW."
   (ein:worksheet--ewoc-buffer (oref view worksheet)))
 
 (cl-defmethod ein:view-render-notebook ((_view ein:classic-view) _notebook)
@@ -120,9 +123,11 @@ OUTPUT-INDEX, when non-nil, is the index of the output just appended.")
   nil)
 
 (cl-defmethod ein:view-cells ((view ein:classic-view))
+  "Return the cells of classic VIEW's worksheet."
   (ein:worksheet-get-cells (oref view worksheet)))
 
 (cl-defmethod ein:view-cell-text ((view ein:classic-view) cell)
+  "Return CELL's source text from classic VIEW's buffer."
   (let ((buffer (ein:view-buffer view)))
     (if (buffer-live-p buffer)
         (with-current-buffer buffer (ein:cell-get-text cell))
@@ -137,6 +142,7 @@ OUTPUT-INDEX, when non-nil, is the index of the output just appended.")
   nil)
 
 (cl-defmethod ein:view-insert-cell ((view ein:classic-view) cell &optional after-cell)
+  "Insert CELL in classic VIEW below AFTER-CELL, or above the first cell."
   (with-current-buffer (ein:view-buffer view)
     (if after-cell
         (ein:worksheet-insert-cell-below (oref view worksheet) cell after-cell)
@@ -145,14 +151,17 @@ OUTPUT-INDEX, when non-nil, is the index of the output just appended.")
        (car (ein:view-cells view))))))
 
 (cl-defmethod ein:view-delete-cell ((view ein:classic-view) cell)
+  "Delete CELL from classic VIEW's worksheet."
   (with-current-buffer (ein:view-buffer view)
     (ein:worksheet-delete-cell (oref view worksheet) cell)))
 
 (cl-defmethod ein:view-move-cell ((view ein:classic-view) cell direction)
+  "Move CELL in classic VIEW in DIRECTION, `up' or `down'."
   (with-current-buffer (ein:view-buffer view)
     (ein:worksheet-move-cell (oref view worksheet) cell (eq direction 'up))))
 
 (cl-defmethod ein:view-select-cell ((view ein:classic-view) cell)
+  "Move point to CELL in classic VIEW."
   (with-current-buffer (ein:view-buffer view)
     (ein:cell-goto cell)))
 

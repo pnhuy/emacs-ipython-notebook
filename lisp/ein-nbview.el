@@ -426,7 +426,7 @@ Return t otherwise.  VIEW defaults to the current buffer's view."
     (ein:nbview--render-footer view cell)))
 
 (defun ein:nbview--set-part-display (view cell part display)
-  "Set PART (header or footer) of CELL to DISPLAY, silently.
+  "Set PART (header or footer) of CELL in VIEW to DISPLAY, silently.
 Do nothing when CELL is not in the buffer."
   (with-current-buffer (oref view buffer)
     (when-let* ((h (ein:nbview--header-pos view cell))
@@ -455,7 +455,7 @@ CREATE non-nil makes it when missing.  Nil when CELL is not shown."
                  ov))))))
 
 (defun ein:nbview--apply-footer-bar (view cell ov)
-  "Set OV's `before-string' to CELL's footer body with its left bar.
+  "Set OV's `before-string' to CELL's footer body in VIEW, with its bar.
 The string starts with the newline that ends the source's last line and
 leaves out the body's final newline, which the footer character
 supplies.  So every line of it starts inside the string and takes its
@@ -702,6 +702,7 @@ edit state.  A renderer error shows the source in
 ;;; Protocol methods
 
 (cl-defmethod ein:view-buffer ((view ein:nbview))
+  "Return VIEW's buffer when it is live, else nil."
   (let ((buffer (oref view buffer)))
     (and (buffer-live-p buffer) buffer)))
 
@@ -723,12 +724,13 @@ edit state.  A renderer error shows the source in
     (ein:view-select-cell view (ein:nbview--cell-at (point)))))
 
 (cl-defmethod ein:view-cells ((view ein:nbview))
+  "Return VIEW's cells in buffer order, or the saved cells without a buffer."
   (if (buffer-live-p (oref view buffer))
       (ein:nbview--scan view)
     (and (oref view worksheet) (slot-value (oref view worksheet) 'saved-cells))))
 
 (cl-defmethod ein:view-cell-text ((view ein:nbview) cell)
-  "Return CELL's source from the buffer and store it in its `input'."
+  "Return CELL's source from VIEW's buffer and store it in its `input'."
   (let ((bounds (and (buffer-live-p (oref view buffer))
                      (ein:nbview--source-bounds view cell))))
     (if bounds
@@ -738,6 +740,7 @@ edit state.  A renderer error shows the source in
       (or (ein:oref-safe cell 'input) ""))))
 
 (cl-defmethod ein:view-set-cell-text ((view ein:nbview) cell text)
+  "Replace CELL's source in VIEW with TEXT."
   (if-let* ((bounds (and (buffer-live-p (oref view buffer))
                          (ein:nbview--source-bounds view cell))))
       (with-current-buffer (oref view buffer)
@@ -786,7 +789,7 @@ most once per `ein:nbview-output-coalesce-delay'."
     (clrhash ein:nbview--output-timers)))
 
 (cl-defmethod ein:view-cell-outputs-changed ((view ein:nbview) cell &optional _index)
-  "Re-render CELL's footer, coalescing bursts of changes.
+  "Re-render CELL's footer in VIEW, coalescing bursts of changes.
 Never signals (process filters call it)."
   (condition-case err
       (when-let* ((buffer (ein:view-buffer view)))
@@ -805,7 +808,8 @@ Never signals (process filters call it)."
                     (error-message-string err)))))
 
 (cl-defmethod ein:view-cell-status-changed ((view ein:nbview) cell)
-  "Re-render CELL's header.  Never signals (process filters call it)."
+  "Re-render CELL's header in VIEW.
+Never signals (process filters call it)."
   (condition-case err
       (when (buffer-live-p (oref view buffer))
         (ein:nbview--render-header view cell))
@@ -813,6 +817,7 @@ Never signals (process filters call it)."
                     (error-message-string err)))))
 
 (cl-defmethod ein:view-insert-cell ((view ein:nbview) cell &optional after-cell)
+  "Render CELL in VIEW after AFTER-CELL, or at the top; return CELL."
   (with-current-buffer (oref view buffer)
     (ein:nbview--with-structural-change
       (ein:nbview--remove-placeholder)
@@ -825,6 +830,7 @@ Never signals (process filters call it)."
     cell))
 
 (cl-defmethod ein:view-delete-cell ((view ein:nbview) cell)
+  "Delete CELL's text from VIEW's buffer as one undoable change."
   (with-current-buffer (oref view buffer)
     (when-let* ((h (ein:nbview--header-pos view cell))
                 (f (ein:nbview--footer-pos h)))
@@ -836,7 +842,8 @@ Never signals (process filters call it)."
         (ein:nbview--ensure-placeholder)))))
 
 (cl-defmethod ein:view-move-cell ((view ein:nbview) cell direction)
-  "Move CELL one place in DIRECTION (`up' or `down'); keep point in it."
+  "Move CELL one place in VIEW in DIRECTION (`up' or `down').
+Keep point in CELL."
   (with-current-buffer (oref view buffer)
     (let* ((h (ein:nbview--header-pos view cell))
            (f (and h (ein:nbview--footer-pos h)))
@@ -870,7 +877,8 @@ Never signals (process filters call it)."
         t))))
 
 (cl-defmethod ein:view-replace-cell ((view ein:nbview) old new)
-  "Replace OLD by NEW in place; point keeps its offset in the source."
+  "Replace OLD by NEW in place in VIEW.
+Point keeps its offset in the source."
   (with-current-buffer (oref view buffer)
     (when-let* ((h (ein:nbview--header-pos view old))
                 (f (ein:nbview--footer-pos h)))
@@ -889,7 +897,8 @@ Never signals (process filters call it)."
         new))))
 
 (cl-defmethod ein:view-select-cell ((view ein:nbview) cell)
-  "Select CELL: move the selection overlay, redecorate old and new cell."
+  "Select CELL in VIEW.
+Move the selection overlay and redecorate the old and new cell."
   (let ((old (oref view selected)))
     (setf (oref view selected) cell)
     (when (buffer-live-p (oref view buffer))
@@ -911,7 +920,8 @@ Never signals (process filters call it)."
   (or (ein:nbview--cell-at (point)) (user-error "No cell here")))
 
 (defun ein:nbview--goto-source (view cell &optional end)
-  "Move point to the start (END non-nil: the end) of CELL's source."
+  "Move point to the start of CELL's source in VIEW.
+With END non-nil, move to its end."
   (when-let* ((bounds (ein:nbview--source-bounds view cell)))
     (goto-char (if end (cdr bounds) (car bounds)))
     (ein:view-select-cell view cell)))
@@ -1282,7 +1292,8 @@ Editing the cell shows its source again."
   "Markers (BEG . END) around the changes made by the running undo.")
 
 (defun ein:nbview--record-undo-change (beg end _len)
-  "`after-change-functions' recorder active during the undo wrappers."
+  "Grow the undo region to cover the change from BEG to END.
+An `after-change-functions' recorder active during the undo wrappers."
   (let ((r ein:nbview--undo-region))
     (if (null r)
         (setq ein:nbview--undo-region (cons (copy-marker beg) (copy-marker end t)))

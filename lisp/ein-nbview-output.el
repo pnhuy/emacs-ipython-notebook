@@ -118,6 +118,7 @@ The rest is behind an expand button (also
     s))
 
 (defun ein:nbview-output--mime-key (mime)
+  "Return the plist keyword for the MIME type."
   (intern (concat ":" mime)))
 
 (defun ein:nbview-output--data-mimes (data)
@@ -126,6 +127,7 @@ The rest is behind an expand button (also
            when (keywordp k) collect (substring (symbol-name k) 1)))
 
 (defun ein:nbview-output--image-type (mime)
+  "Return the Emacs image type for MIME, or nil."
   (pcase mime
     ("image/png" 'png) ("image/jpeg" 'jpeg) ("image/gif" 'gif)
     ("image/svg+xml" 'svg)))
@@ -260,6 +262,8 @@ Strings are kept.  ALLOW-REMOTE-IMG is as for
    (t (ein:nbview-output--clean-children node allow-remote-img))))
 
 (defun ein:nbview-output--clean-children (node allow-remote-img)
+  "Return a sanitized copy of NODE and its children.
+ALLOW-REMOTE-IMG non-nil keeps remote image references."
   (let ((copy (copy-sequence node)))
     (setcar (cdr copy) (copy-tree (dom-attributes node)))
     (ein:nbview-output--clean-attrs copy allow-remote-img)
@@ -269,8 +273,9 @@ Strings are kept.  ALLOW-REMOTE-IMG is as for
     copy))
 
 (defun ein:nbview--sanitize-html-dom (dom)
-  "A copy of the HTML DOM without scripts, styles, embedded documents,
-event handler attributes or remote references.
+  "Return a sanitized copy of the HTML DOM.
+The copy has no scripts, styles, embedded documents, event handler
+attributes or remote references.
 Remote images are kept only when `ein:nbview-fetch-remote-images' is
 non-nil."
   (or (ein:nbview-output--clean dom ein:nbview-fetch-remote-images)
@@ -303,7 +308,8 @@ means SVG cannot be parsed, or libxml2 is not available."
 (defalias 'ein:nbview--sanitize-svg #'ein:nbview-sanitize-svg)
 
 (defun ein:nbview-output--html (html context)
-  "The HTML string HTML rendered as text by shr, after sanitizing."
+  "Return HTML rendered as text by shr, after sanitizing.
+CONTEXT gives the window width and whether images may be shown."
   (require 'shr)
   (let* ((dom (with-temp-buffer
                 (insert html)
@@ -334,12 +340,14 @@ means SVG cannot be parsed, or libxml2 is not available."
      (t s))))
 
 (defun ein:nbview-output--latex (latex context)
+  "Return LATEX rendered for the output CONTEXT."
   (ein:latex-render (ein:nbview-output--strip-math latex) t
                     (lambda (&rest _)
                       (when-let* ((f (plist-get context :on-update))) (funcall f)))
                     (plist-get context :cell)))
 
 (defun ein:nbview-output--markdown (markdown context)
+  "Return MARKDOWN rendered for the output CONTEXT."
   (ein:nbview-render-markdown
    markdown
    (list :graphic (plist-get context :graphic)
@@ -361,6 +369,7 @@ means SVG cannot be parsed, or libxml2 is not available."
     (_ (ein:nbview-output--text value 'ein:nbview-output-face))))
 
 (defun ein:nbview-output--unsupported (data)
+  "Return a placeholder line for the unsupported bundle DATA."
   (let* ((mime (car (ein:nbview-output--data-mimes data)))
          (value (plist-get data (ein:nbview-output--mime-key (or mime ""))))
          (bytes (string-bytes (if (stringp value) value

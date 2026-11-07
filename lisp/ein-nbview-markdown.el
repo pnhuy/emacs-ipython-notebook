@@ -145,6 +145,7 @@ SOURCE is not modified.  The result has no trailing newline."
                "\n\n")))
 
 (defun ein:nbview-md--ctx (key)
+  "Return KEY's value in the current rendering context."
   (plist-get ein:nbview-md--context key))
 
 ;;; Block parser
@@ -158,13 +159,17 @@ SOURCE is not modified.  The result has no trailing newline."
 (defconst ein:nbview-md--setext-re "\\` \\{0,3\\}\\(=+\\|-+\\)[ \t]*\\'")
 
 (defun ein:nbview-md--blank-p (line)
+  "Return non-nil when LINE is empty or whitespace only."
   (string-match-p "\\`[ \t]*\\'" line))
 
 (defun ein:nbview-md--math-start-p (line)
+  "Return non-nil when LINE opens a display math block."
   (let ((l (string-trim-left line)))
     (or (string-prefix-p "$$" l) (string-prefix-p "\\[" l))))
 
 (defun ein:nbview-md--table-start-p (line next)
+  "Return non-nil when LINE and NEXT start a table.
+NEXT must be the delimiter row."
   (and next (string-search "|" line)
        (string-search "-" next)
        (string-match-p ein:nbview-md--align-re next)))
@@ -321,6 +326,7 @@ SOURCE is not modified.  The result has no trailing newline."
   string)
 
 (defun ein:nbview-md--render-block (block)
+  "Return the rendered string of the parsed BLOCK."
   (pcase (plist-get block :type)
     ('heading
      (ein:nbview-md--faced (ein:nbview-md--inline (string-trim (plist-get block :text)))
@@ -350,6 +356,7 @@ SOURCE is not modified.  The result has no trailing newline."
     (_ "")))
 
 (defun ein:nbview-md--item (item)
+  "Return the rendered string of the list ITEM."
   (let* ((graphic (ein:nbview-md--ctx :graphic))
          (marker (plist-get item :marker))
          (prefix (pcase (plist-get item :check)
@@ -379,7 +386,8 @@ SOURCE is not modified.  The result has no trailing newline."
     (ein:nbview-md--faced s 'ein:nbview-md-code)))
 
 (defun ein:nbview-md--math (formula display)
-  "FORMULA as an image when possible, else as text."
+  "Return FORMULA as an image when possible, else as text.
+DISPLAY non-nil renders display math rather than inline math."
   (if (and (ein:nbview-md--ctx :graphic) (ein:latex-available-p))
       (let ((refresh (ein:nbview-md--ctx :refresh)))
         (ein:latex-render formula display
@@ -406,11 +414,14 @@ SOURCE is not modified.  The result has no trailing newline."
     (mapcar (lambda (c) (string-trim (string-replace "\\|" "|" c))) (nreverse cells))))
 
 (defun ein:nbview-md--pad (string width align)
+  "Pad STRING to WIDTH columns, aligned per ALIGN.
+ALIGN is `left', `right' or `center'."
   (let* ((gap (max 0 (- width (string-width string))))
          (left (pcase align ('right gap) ('center (/ gap 2)) (_ 0))))
     (concat (make-string left ?\s) string (make-string (- gap left) ?\s))))
 
 (defun ein:nbview-md--table (rows align)
+  "Return the table ROWS rendered with column alignments from ALIGN."
   (let* ((aligns (mapcar (lambda (c)
                            (cond ((and (string-prefix-p ":" c) (string-suffix-p ":" c)) 'center)
                                  ((string-suffix-p ":" c) 'right)
@@ -626,11 +637,14 @@ MIN characters), must follow a non-space character."
   "URL to (TYPE . DATA) of downloaded images, or `pending' or `failed'.")
 
 (defun ein:nbview-md--placeholder (alt &optional url)
+  "Return a text placeholder for an image with ALT text.
+With URL, the placeholder is a link to it."
   (let ((s (propertize (format "[image%s]" (if (string-empty-p alt) "" (concat " " alt)))
                        'face 'ein:nbview-md-markup)))
     (if url (ein:nbview-md--link s url) s)))
 
 (defun ein:nbview-md--max-size ()
+  "Return the image size limit (MAX-WIDTH . MAX-HEIGHT) in pixels."
   (let ((w (or (ein:nbview-md--ctx :window-width) 800)))
     (cons (if (floatp ein:nbview-image-max-width)
               (max 16 (round (* ein:nbview-image-max-width w)))
@@ -646,6 +660,7 @@ Return nil when TYPE is not displayable."
                     :ascent 'center))))
 
 (defun ein:nbview-md--file-type (name)
+  "Return the image type of the file NAME from its extension, or nil."
   (pcase (downcase (or (file-name-extension name) ""))
     ("png" 'png) ((or "jpg" "jpeg") 'jpeg) ("gif" 'gif) ("webp" 'webp) ("svg" 'svg)))
 

@@ -67,7 +67,9 @@ Skip the current test when nbformat is not importable."
   "Return VALUE with sorted object keys and joined text lists.
 KEY is the object key VALUE was found under."
   (cond
-   ((and (memq key ein:testing--joined-keys)
+   ((and (or (memq key ein:testing--joined-keys)
+             ;; Mime bundle entries (nbformat `rejoin_lines' joins them too).
+             (and key (string-match-p "/" (symbol-name key))))
          (listp value) (seq-every-p #'stringp value))
     (apply #'concat value))
    ;; Object: alist with symbol keys (json-parse-string :object-type alist).
@@ -90,6 +92,16 @@ KEY is the object key VALUE was found under."
 Key order and the string/list form of `source'/`text' are ignored."
   (equal (ein:testing--normalize-json (ein:testing--parse a))
          (ein:testing--normalize-json (ein:testing--parse b))))
+
+(defun ein:testing-g9-normalize (json)
+  "Apply the nb44 G9 exceptions to the JSON string: drop cell ids, minor 4."
+  (let ((data (json-parse-string json :object-type 'alist
+                                 :null-object :null :false-object :false)))
+    (setf (alist-get 'nbformat_minor data) 4)
+    (setf (alist-get 'cells data)
+          (cl-map 'vector (lambda (cell) (assq-delete-all 'id (copy-alist cell)))
+                  (alist-get 'cells data)))
+    (json-serialize data :null-object :null :false-object :false)))
 
 (provide 'ein-testing-nbformat)
 ;;; ein-testing-nbformat.el ends here

@@ -247,6 +247,9 @@ WARNING: OBJ and SLOT are evaluated multiple times,
   (plist-get json-data :cell_type))
 
 (defun ein:cell-from-json (data &rest args)
+  "Make a cell from DATA, a parsed nbformat cell with null as nil.
+ARGS are initargs; pass `:raw' with the cell as read by
+`ein:json-read-faithful' so that saving reproduces it (default DATA)."
   (let ((cell (ein:cell-init (apply #'ein:cell-from-type
                                     (ein:cell--determine-cell-type data) args)
                              data)))
@@ -254,7 +257,20 @@ WARNING: OBJ and SLOT are evaluated multiple times,
       (setf (slot-value cell 'cell-id) it))
     (awhen (plist-get data :metadata)
       (ein:oset-if-empty cell 'metadata it))
+    (unless (slot-value cell 'raw)
+      (setf (slot-value cell 'raw) data))
+    (let ((outputs (slot-value cell 'outputs))
+          (raw-outputs (append (plist-get (slot-value cell 'raw) :outputs) nil)))
+      (when (and outputs (= (length outputs) (length raw-outputs)))
+        (setf (slot-value cell 'raw-outputs) (cl-mapcar #'cons outputs raw-outputs))))
     cell))
+
+(defun ein:cell--fresh-id (&optional taken)
+  "Return a new 8-hex-digit cell id not in TAKEN, a list of ids."
+  (let (id)
+    (while (or (null id) (member id taken))
+      (setq id (substring (md5 (format "%s%s%s" (random t) (current-time) id)) 0 8)))
+    id))
 
 (cl-defmethod ein:cell-init ((cell ein:codecell) data)
   (ein:oset-if-empty cell 'outputs (mapcar (lambda (o)
@@ -292,18 +308,30 @@ WARNING: OBJ and SLOT are evaluated multiple times,
                                     (slot-value cell 'input)))
     ;; copy output when the new cell has it
     (when (memq :output (slot-value new 'element-names))
-      (setf (slot-value new 'outputs) (mapcar 'identity (slot-value cell 'outputs))))
+      (setf (slot-value new 'outputs) (mapcar 'identity (slot-value cell 'outputs))
+            (slot-value new 'raw-outputs) (slot-value cell 'raw-outputs)))
+    ;; keep identity (contracts/notebook-roundtrip.md G3, G5)
+    (setf (slot-value new 'cell-id) (slot-value cell 'cell-id)
+          (slot-value new 'metadata) (copy-tree (slot-value cell 'metadata))
+          (slot-value new 'raw) (slot-value cell 'raw))
     new))
 
 (cl-defmethod ein:cell-convert ((cell ein:codecell) _type)
   (let ((new (cl-call-next-method)))
-    (when (and (cl-typep new 'ein:codecell)
-               (slot-boundp cell 'kernel))
-      (setf (slot-value new 'kernel) (slot-value cell 'kernel)))
+    (when (cl-typep new 'ein:codecell)
+      (when (slot-boundp cell 'kernel)
+        (setf (slot-value new 'kernel) (slot-value cell 'kernel)))
+      (when (slot-boundp cell 'input-prompt-number)
+        (setf (slot-value new 'input-prompt-number)
+              (slot-value cell 'input-prompt-number)))
+      (setf (slot-value new 'collapsed) (slot-value cell 'collapsed)))
     new))
 
 (cl-defmethod ein:cell-copy ((cell ein:basecell))
-  (ein:cell-convert cell (slot-value cell 'cell-type)))
+  "Return a copy of CELL with a fresh id (G5: copy/yank gets a new id)."
+  (let ((new (ein:cell-convert cell (slot-value cell 'cell-type))))
+    (setf (slot-value new 'cell-id) (ein:cell--fresh-id))
+    new))
 
 (cl-defmethod ein:cell-convert-inplace ((cell ein:basecell) type)
   "Convert CELL to TYPE and redraw corresponding ewoc nodes."
@@ -929,18 +957,63 @@ Called from ewoc pretty printer via `ein:cell-insert-output'."
     (language . ,(or (ein:cell-language cell) "python"))
     (collapsed . ,(if (slot-value cell 'collapsed) t json-false))))
 
+(defconst ein:cell--type-specific-keys
+  '((:outputs "code")
+    (:execution_count "code")
+    (:attachments "markdown" "raw"))
+  "nbformat 4 cell keys and the cell types for which each is valid.")
+
+(defun ein:cell--plist-remove (plist keys)
+  (cl-loop for (k v) on plist by #'cddr
+           unless (memq k keys) nconc (list k v)))
+
+(defun ein:cell--metadata-to-json (cell)
+  "Return CELL metadata for saving: as read unless changed (G3, G4)."
+  (let* ((raw-metadata (plist-get (slot-value cell 'raw) :metadata))
+         (metadata (copy-tree (slot-value cell 'metadata))))
+    (when (slot-exists-p cell 'collapsed)
+      (let* ((v (plist-get (ein:json-nilify raw-metadata) :collapsed))
+             (was (and v (not (eq v json-false))))
+             (now (slot-value cell 'collapsed)))
+        (unless (eq (not was) (not now))
+          (setq metadata (plist-put metadata :collapsed (if now t json-false)))
+          (when (plist-member (plist-get metadata :jupyter) :outputs_hidden)
+            (setq metadata (plist-put metadata :jupyter
+                                      (plist-put (plist-get metadata :jupyter)
+                                                 :outputs_hidden (if now t json-false))))))))
+    (ein:json-prefer-raw metadata raw-metadata)))
+
+(defun ein:cell--nb4-json (cell owned)
+  "Return CELL as an nbformat 4 alist.
+Start from the cell as read (slot `raw') so unknown keys survive, then
+overwrite the keys EIN owns: cell_type, id, metadata, source and OWNED,
+a plist."
+  (let* ((type (slot-value cell 'cell-type))
+         (raw (slot-value cell 'raw))
+         (foreign (cl-loop for (key . types) in ein:cell--type-specific-keys
+                           unless (member type types) collect key))
+         (base (ein:cell--plist-remove
+                raw (append '(:cell_type :id :metadata :source) foreign
+                            (cl-loop for (k _v) on owned by #'cddr collect k)))))
+    (append
+     `((cell_type . ,type)
+       (id . ,(slot-value cell 'cell-id))
+       (metadata . ,(ein:cell--metadata-to-json cell))
+       (source . ,(ein:cell-get-text cell)))
+     (cl-loop for (k v) on owned by #'cddr
+              collect (cons (intern (substring (symbol-name k) 1)) v))
+     (cl-loop for (k v) on base by #'cddr
+              collect (cons (intern (substring (symbol-name k) 1)) v)))))
+
 (cl-defmethod ein:cell-to-nb4-json ((cell ein:codecell) _wsidx)
-  (let ((execute-count (aif (ein:oref-safe cell 'input-prompt-number)
-                           (and (numberp it) it)))
-        (metadata (slot-value cell 'metadata))
-	(cell-id (slot-value cell 'cell-id)))
-    `((source . ,(ein:cell-get-text cell))
-      (cell_type . "code")
-      (execution_count . ,execute-count)
-      (outputs . ,(apply #'vector (slot-value cell 'outputs)))
-      (metadata . ,(plist-put metadata :collapsed (if (slot-value cell 'collapsed) t
-                                                    json-false)))
-      (id . ,cell-id))))
+  (let ((count (ein:oref-safe cell 'input-prompt-number))
+        (raw-outputs (slot-value cell 'raw-outputs)))
+    (ein:cell--nb4-json
+     cell
+     `(:execution_count ,(if (numberp count) count :null) ; G9(c): "*" -> null
+       :outputs ,(apply #'vector
+                        (mapcar (lambda (o) (or (cdr (assq o raw-outputs)) o))
+                                (slot-value cell 'outputs)))))))
 
 
 (cl-defmethod ein:cell-to-json ((cell ein:textcell))
@@ -948,12 +1021,7 @@ Called from ewoc pretty printer via `ein:cell-insert-output'."
     (source    . ,(ein:cell-get-text cell))))
 
 (cl-defmethod ein:cell-to-nb4-json ((cell ein:textcell) _wsidx)
-  (let ((metadata (slot-value cell 'metadata))
-	(cell-id (slot-value cell 'cell-id)))
-    `((cell_type . ,(slot-value cell 'cell-type))
-      (source    . ,(ein:cell-get-text cell))
-      (metadata . ,(plist-put metadata :collapsed json-false))
-      (id . ,cell-id))))
+  (ein:cell--nb4-json cell nil))
 
 (cl-defmethod ein:cell-next ((cell ein:basecell))
   "Return next cell of the given CELL or nil if CELL is the last one."

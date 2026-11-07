@@ -114,21 +114,16 @@ is not found."
 ;; from-json
 
 (ert-deftest ein:notebook-from-json-simple ()
-  (with-current-buffer (ein:testing-notebook-from-json
-                        eintest:notebook-data-simple-json)
-    (should (ein:$notebook-p ein:%notebook%))
-    (should (equal (ein:$notebook-notebook-name ein:%notebook%) "Untitled0.ipynb"))
-    (should (equal (ein:worksheet-ncells ein:%worksheet%) 1))
-    (let ((cell (car (ein:worksheet-get-cells ein:%worksheet%))))
-      (should (ein:codecell-p cell))
-      (should (equal (oref cell :input) "1 + 1"))
-      (should (equal (oref cell :input-prompt-number) 1))
-      (let ((outputs (oref cell :outputs)))
-        (should (equal (length outputs) 1))
-        (let ((o1 (car outputs)))
-          (should (equal (plist-get o1 :output_type) "pyout"))
-          (should (equal (plist-get o1 :prompt_number) 1))
-          (should (equal (plist-get o1 :text) "2")))))))
+  "nbformat 3 is refused (T063) and leaves no notebook buffer behind.
+Jupyter Server upgrades v3 files to v4 before EIN sees them."
+  (let ((before (buffer-list)))
+    (should (equal (cadr (should-error (ein:testing-notebook-from-json
+                                        eintest:notebook-data-simple-json)
+                                       :type 'user-error))
+                   "Unsupported nbformat 3 (Jupyter Server normally upgrades it)"))
+    (should-not (cl-find-if (lambda (b) (and (not (memq b before))
+                                             (buffer-local-value 'ein:%notebook% b)))
+                            (buffer-list)))))
 
 (ert-deftest ein:notebook-from-json-empty ()
   (with-current-buffer (ein:testing-notebook-make-empty)
@@ -1283,3 +1278,45 @@ value of `ein:worksheet-enable-undo'."
 (ert-deftest ein:notebook--check-nbformat-warn-minor ()
   (ein:notebook--check-nbformat-assert-match
    "version v2\\.1, [^\\.]* up to v2.0" 2 1 2 0))
+
+;;; Invalid notebook data (T062, constitution VI)
+
+(require 'ein-testing-nbformat)
+
+(defun eintest:notebook-invalid (name expected)
+  (let ((buffers (buffer-list))
+        (opened (hash-table-count ein:notebook--opened-map))
+        (path (expand-file-name (concat "invalid/" name) ein:testing-fixtures-dir)))
+    (let ((err (should-error (ein:testing-notebook-from-file path) :type 'user-error)))
+      (should (string-match-p (regexp-quote expected) (cadr err))))
+    (should (= opened (hash-table-count ein:notebook--opened-map)))
+    (let ((new (cl-set-difference (buffer-list) buffers)))
+      (should-not (cl-some (lambda (b) (buffer-local-value 'ein:%notebook% b)) new))
+      (mapc #'ein:testing-notebook-kill new))))
+
+(ert-deftest ein:notebook-invalid-truncated ()
+  (eintest:notebook-invalid "truncated.ipynb" "Notebook is not valid JSON"))
+
+(ert-deftest ein:notebook-invalid-no-cells ()
+  (eintest:notebook-invalid "no-cells.ipynb" "Notebook has no cell list"))
+
+(ert-deftest ein:notebook-invalid-cells-not-list ()
+  (eintest:notebook-invalid "cells-not-list.ipynb" "Notebook has no cell list"))
+
+(ert-deftest ein:notebook-invalid-nbformat3 ()
+  (eintest:notebook-invalid "nbformat3.ipynb"
+                            "Unsupported nbformat 3 (Jupyter Server normally upgrades it)"))
+
+(ert-deftest ein:notebook-invalid-corpus-complete ()
+  "Every invalid fixture has a test."
+  (dolist (file (directory-files (expand-file-name "invalid" ein:testing-fixtures-dir)
+                                 nil "\\.ipynb\\'"))
+    (should (ert-get-test (intern (format "ein:notebook-invalid-%s"
+                                          (file-name-base file)))))))
+
+(ert-deftest ein:notebook-future-minor-preserved ()
+  "nb46-future opens normally; minor 6 and x_future survive."
+  (ein:testing-with-notebook-file (ein:testing-fixture "nb46-future.ipynb")
+    (let ((json (ein:json-encode-notebook (ein:notebook-to-json ein:%notebook%))))
+      (should (string-match-p "\"nbformat_minor\":6" json))
+      (should (string-match-p "x_future" json)))))

@@ -34,3 +34,115 @@
 (defun ein-test-list-contents-1 ()
   (ein:content-list-contents "" )
   )
+
+;;; Safe, conflict-checked save (T059, T069, T070)
+
+(require 'ein-testing-notebook)
+(require 'ein-testing-nbformat)
+
+(defvar eintest:save-requests nil
+  "List of (TYPE URL SETTINGS) sent by `ein:query-singleton-ajax', newest first.")
+
+(defmacro eintest:with-save-stub (server-last-modified &rest body)
+  "Run BODY with HTTP stubbed.
+GET returns SERVER-LAST-MODIFIED; PUT records the request and does
+not call back (the test drives the callbacks)."
+  (declare (indent 1))
+  `(let ((eintest:save-requests nil))
+     (cl-letf (((symbol-function 'ein:query-singleton-ajax)
+                (lambda (url &rest settings)
+                  (let ((type (plist-get settings :type)))
+                    (push (list type url settings) eintest:save-requests)
+                    (when (equal type "GET")
+                      (funcall (plist-get settings :success)
+                               :data (list :last_modified ,server-last-modified)))))))
+       ,@body)))
+
+(defun eintest:save-puts ()
+  (cl-remove-if-not (lambda (r) (equal (car r) "PUT")) eintest:save-requests))
+
+(defmacro eintest:with-dirty-notebook (&rest body)
+  (declare (indent 0))
+  `(ein:testing-with-notebook-file (ein:testing-fixture "smoke.ipynb")
+     (setf (ein:$notebook-dirty ein:%notebook%) t)
+     ,@body))
+
+(ert-deftest ein:content-save-encode-failure ()
+  "(a) Unencodable value: no PUT, still dirty, message mentions retry."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-metadata ein:%notebook%)
+          (plist-put (copy-sequence (ein:$notebook-metadata ein:%notebook%))
+                     :bad (current-buffer)))
+    (eintest:with-save-stub nil
+      (let ((err (should-error (ein:notebook-save-notebook ein:%notebook%)
+                               :type 'user-error)))
+        (should (string-match-p "Save aborted.*retry" (cadr err))))
+      (should-not eintest:save-requests))
+    (should (ein:notebook-modified-p ein:%notebook%))))
+
+(ert-deftest ein:content-save-utf8-body ()
+  "(b) The PUT body is UTF-8 bytes whatever the buffer coding system."
+  (eintest:with-dirty-notebook
+    (let ((cell (cl-find-if (lambda (c) (cl-typep c 'ein:codecell))
+                            (ein:worksheet-get-cells ein:%worksheet%))))
+      (ein:cell-set-text cell "s = \"→\""))
+    (setq-local buffer-file-coding-system 'latin-1)
+    (eintest:with-save-stub nil
+      (ein:notebook-save-notebook ein:%notebook%)
+      (let ((body (plist-get (nth 2 (car (eintest:save-puts))) :data)))
+        (should (stringp body))
+        (should-not (multibyte-string-p body))
+        (should (string-match-p "s = \\\\\"→\\\\\"" (decode-coding-string body 'utf-8)))))))
+
+(ert-deftest ein:content-save-conflict-cancel ()
+  "(c) Changed last_modified: prompt; cancel means no PUT, still dirty."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "2026-01-01T00:00:00Z")
+    (let (asked)
+      (cl-letf (((symbol-function 'ein:notebook--confirm-overwrite)
+                 (lambda (_nb) (setq asked t) 'cancel)))
+        (eintest:with-save-stub "2026-02-02T00:00:00Z"
+          (ein:notebook-save-notebook ein:%notebook%)
+          (should asked)
+          (should (= 1 (length eintest:save-requests)))
+          (should-not (eintest:save-puts)))))
+    (should (ein:notebook-modified-p ein:%notebook%))))
+
+(ert-deftest ein:content-save-conflict-overwrite ()
+  "(c') Overwrite proceeds with the PUT; same last_modified does not ask."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+    (cl-letf (((symbol-function 'ein:notebook--confirm-overwrite)
+               (lambda (_nb) 'overwrite)))
+      (eintest:with-save-stub "t2"
+        (ein:notebook-save-notebook ein:%notebook%)
+        (should (= 1 (length (eintest:save-puts))))))
+    (cl-letf (((symbol-function 'ein:notebook--confirm-overwrite)
+               (lambda (_nb) (error "Should not ask"))))
+      (eintest:with-save-stub "t1"
+        (ein:notebook-save-notebook ein:%notebook%)
+        (should (= 1 (length (eintest:save-puts))))))))
+
+(ert-deftest ein:content-save-dirty-cleared-only-on-success ()
+  "(d) Dirty stays until the success callback; an error keeps it."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+    (eintest:with-save-stub "t1"
+      ;; Error path.
+      (ein:notebook-save-notebook ein:%notebook%)
+      (should (ein:notebook-modified-p ein:%notebook%))
+      (let ((settings (nth 2 (car (eintest:save-puts)))) msg)
+        (cl-letf (((symbol-function 'message)
+                   (lambda (fmt &rest args) (setq msg (apply #'format fmt args)))))
+          (funcall (plist-get settings :error) :symbol-status 'error))
+        (should (string-match-p "Save failed (error); notebook still modified — retry with C-x C-s"
+                                msg)))
+      (should (ein:notebook-modified-p ein:%notebook%))
+      ;; Success path.
+      (setq eintest:save-requests nil)
+      (ein:notebook-save-notebook ein:%notebook%)
+      (should (ein:notebook-modified-p ein:%notebook%))
+      (funcall (plist-get (nth 2 (car (eintest:save-puts))) :success)
+               :data (list :last_modified "t3"))
+      (should-not (ein:notebook-modified-p ein:%notebook%))
+      (should (equal "t3" (ein:$notebook-last-modified ein:%notebook%))))))

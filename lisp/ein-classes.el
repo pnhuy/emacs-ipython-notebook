@@ -62,6 +62,9 @@
     :file      : Either :text or :base64
     :notebook  : :json.
 
+`ein:$content-json'
+  For :notebook only, the notebook as read by `ein:json-read-faithful'
+  (JSON null is `:null').  `raw-content' is the same data with null as nil.
 "
   url-or-port
   notebook-api-version
@@ -74,7 +77,8 @@
   mimetype
   raw-content
   format
-  session-p)
+  session-p
+  json)
 ;;; Websockets
 
 (cl-defstruct ein:$websocket
@@ -139,6 +143,16 @@
 
 `ein:$notebook-api-version' : integer
    Major version of the IPython notebook server we are talking to.
+
+`ein:$notebook-raw' : plist
+   Top-level notebook object as read (JSON null is `:null').  Keys EIN
+   does not own are re-emitted on save.
+
+`ein:$notebook-last-modified' : string
+   Server `last_modified' recorded at open and after each save.
+
+`ein:$notebook-view' : symbol
+   Presentation used for this notebook.
 "
   url-or-port
   notebook-id ;; In IPython-2.0 this is "[:path]/[:name].ipynb"
@@ -155,7 +169,10 @@
   events
   worksheets
   scratchsheets
-  api-version)
+  api-version
+  raw
+  last-modified
+  view)
 
 
 ;;; Worksheet
@@ -241,7 +258,13 @@ defined by the server as just ein:$kernel in the client."
    (metadata :initarg :metadata :initform nil :type list :accessor ein:cell-metadata)
    (events :initarg :events :type ein:events)
    (cell-id :initarg :cell-id :initform (ein:utils-uuid) :type string
-            :accessor ein:cell-id))
+            :accessor ein:cell-id)
+   (raw :initarg :raw :initform nil
+        :documentation "Original parsed JSON object of this cell; keys not owned by EIN are re-emitted on save")
+   (raw-outputs :initarg :raw-outputs :initform nil
+                :documentation "Alist (OUTPUT . FAITHFUL) mapping each loaded
+output in slot `outputs' to its JSON as read, so unchanged outputs are
+saved verbatim."))
   "Notebook cell base class")
 
 (defclass ein:codecell (ein:basecell)

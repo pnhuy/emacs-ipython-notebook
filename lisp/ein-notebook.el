@@ -163,15 +163,15 @@ and put last warning in minibuffer."
        (with-current-buffer (ein:notebook-buffer notebook*)
          (pm-select-buffer (pm-innermost-span))
          (pop-to-buffer (pm-span-buffer (pm-innermost-span)))))
-     (when (and (not noninteractive)
-                (null (plist-member (ein:$notebook-metadata notebook*) :kernelspec)))
+     ;; Record the kernel in metadata for the next save, but never
+     ;; write to the server merely because the notebook was opened.
+     (when (null (plist-member (ein:$notebook-metadata notebook*) :kernelspec))
        (awhen (ein:$notebook-kernelspec notebook*)
          (setf (ein:$notebook-metadata notebook*)
                (plist-put (ein:$notebook-metadata notebook*)
                           :kernelspec (ein:notebook--spec-insert-name
                                        (ein:$kernelspec-name it)
-                                       (ein:$kernelspec-spec it))))
-         (ein:notebook-save-notebook notebook*)))
+                                       (ein:$kernelspec-spec it))))))
      (when callback*
        (funcall callback* notebook* created))
      (-when-let* ((created created)
@@ -245,7 +245,10 @@ where `created' indicates a new notebook or an existing one."
   (ein:notebook-bind-events notebook (ein:events-new))
   (ein:notebook-set-kernelspec notebook (plist-get (ein:$content-raw-content content) :metadata))
   (ein:notebook-install-kernel notebook)
-  (ein:notebook-from-json notebook (ein:$content-raw-content content))
+  (ein:notebook-from-json notebook (ein:$content-raw-content content)
+                          (ein:$content-json content))
+  (setf (ein:$notebook-last-modified notebook)
+        (ein:$content-last-modified content))
   (if (not (with-current-buffer (ein:notebook-buffer notebook)
              (ein:get-notebook)))
       (error "ein:notebook-open--callback: notebook instantiation failed")
@@ -436,20 +439,71 @@ This is equivalent to do ``C-c`` in the console program."
    :get-current
    (lambda () ein:%worksheet%)))
 
-(defun ein:notebook-from-json (notebook data)
+(defun ein:notebook--parse (string)
+  "Parse notebook JSON STRING as `ein:json-read-faithful' would.
+Signal `user-error' when STRING is not JSON."
+  (condition-case err
+      (json-parse-string string :object-type 'plist :array-type 'array
+                         :null-object :null :false-object json-false)
+    (json-error
+     (user-error "Notebook is not valid JSON (%s)" (error-message-string err)))))
+
+(defun ein:notebook--validate (data)
+  "Signal `user-error' unless DATA is an nbformat 4 notebook EIN can open."
+  (unless (and (consp data) (keywordp (car data)))
+    (user-error "Notebook is not valid JSON (expected an object)"))
+  (let ((nbformat (plist-get data :nbformat))
+        (cells (plist-get data :cells))
+        (minor (plist-get data :nbformat_minor)))
+    (cond ((eql nbformat 3)
+           (user-error "Unsupported nbformat 3 (Jupyter Server normally upgrades it)"))
+          ((not (eql nbformat 4))
+           (user-error "Unsupported nbformat %s" nbformat))
+          ;; Read by `ein:json-read-faithful', a JSON array is a vector
+          ;; and an empty object is nil.
+          ((not (vectorp cells))
+           (user-error "Notebook has no cell list"))
+          ((not (or (null minor) (natnump minor)))
+           (user-error "Notebook has an invalid nbformat_minor %S" minor)))))
+
+(defun ein:notebook--repair-duplicate-ids (cells)
+  "Return CELLS, a list of cell plists, with each `:id' made unique.
+A repeated id gets the first free suffix -1, -2, ...; the repaired
+cell is a modified copy and a warning is logged."
+  (let ((seen (make-hash-table :test #'equal))
+        (taken (make-hash-table :test #'equal)))
+    (dolist (cell cells)
+      (let ((id (plist-get cell :id)))
+        (when (stringp id) (puthash id t seen))))
+    (mapcar
+     (lambda (cell)
+       (let ((id (plist-get cell :id)))
+         (cond ((not (stringp id)) cell)
+               ((not (gethash id taken)) (puthash id t taken) cell)
+               (t (let* ((n 1) (new (format "%s-%d" id n)))
+                    (while (or (gethash new taken) (gethash new seen))
+                      (setq n (1+ n) new (format "%s-%d" id n)))
+                    (puthash new t taken)
+                    (ein:log 'warn "Duplicate cell id %s renamed to %s" id new)
+                    (plist-put (copy-sequence cell) :id new))))))
+     cells)))
+
+(defun ein:notebook-from-json (notebook data &optional raw)
+  "Fill NOTEBOOK from DATA, a parsed nbformat 4 notebook with null as nil.
+RAW is the same notebook as read by `ein:json-read-faithful'; it is
+kept so that saving reproduces keys EIN does not own (default DATA).
+Signal `user-error' before creating any buffer when DATA is invalid."
+  (ein:notebook--validate data)
+  (setq raw (or raw data))
   (cl-destructuring-bind (&key metadata nbformat nbformat_minor
                           &allow-other-keys)
       data
     (setf (ein:$notebook-metadata notebook) metadata)
     (setf (ein:$notebook-nbformat notebook) nbformat)
-    (setf (ein:$notebook-nbformat-minor notebook) nbformat_minor))
+    (setf (ein:$notebook-nbformat-minor notebook) nbformat_minor)
+    (setf (ein:$notebook-raw notebook) raw))
   (setf (ein:$notebook-worksheets notebook)
-        (cl-case (ein:$notebook-nbformat notebook)
-          (3 (ein:read-nbformat3-worksheets notebook data))
-          (4 (ein:read-nbformat4-worksheets notebook data))
-          (t (prog1 nil
-               (ein:log 'error "nbformat version %s unsupported"
-                        (ein:$notebook-nbformat notebook))))))
+        (ein:read-nbformat4-worksheets notebook data raw))
   (awhen (ein:$notebook-worksheets notebook)
     (ein:notebook--worksheet-render notebook (cl-first it)))
   notebook)
@@ -468,31 +522,43 @@ This is equivalent to do ``C-c`` in the console program."
 ;; that cells are allowed to have tags. Clever use of this feature may lead to
 ;; good things.
 
-(defun ein:read-nbformat4-worksheets (notebook data)
+(defun ein:read-nbformat4-worksheets (notebook data &optional raw)
   "Convert a notebook in nbformat4 to a list of worksheet-like
-  objects suitable for processing in ein:notebook-from-json."
-  (let* ((cells (plist-get data :cells))
-         (ws-cells (mapcar (lambda (data) (ein:cell-from-json data)) cells))
+  objects suitable for processing in ein:notebook-from-json.
+RAW is DATA as read faithfully; its cells become the cells' `raw'."
+  (let* ((raw-cells (ein:notebook--repair-duplicate-ids
+                     (append (plist-get (or raw data) :cells) nil)))
+         (ws-cells (mapcar (lambda (raw-cell)
+                             (ein:cell-from-json (ein:json-nilify raw-cell)
+                                                 :raw raw-cell))
+                           raw-cells))
          (worksheet (ein:notebook--worksheet-new notebook)))
     (setf (oref worksheet saved-cells) ws-cells)
     ;(mapcar (lambda (data) (message "test %s" (slot-value data 'metadata))) ws-cells)
     (list worksheet)))
 
+(defun ein:notebook--kernelspec-changed (notebook)
+  "Non-nil when NOTEBOOK's kernelspec metadata differs from the one read.
+The kernel-switch command is the only writer of that key (G4)."
+  (not (equal (plist-get (ein:$notebook-metadata notebook) :kernelspec)
+              (plist-get (ein:json-nilify
+                          (plist-get (ein:$notebook-raw notebook) :metadata))
+                         :kernelspec))))
+
 (defun ein:notebook-to-json (notebook)
-  "Return json-ready alist."
-  (let ((data
-         (cl-case (ein:$notebook-nbformat notebook)
-           (3 (ein:write-nbformat3-worksheets notebook))
-           (4 (ein:write-nbformat4-worksheets notebook))
-           (t (ein:log 'error "nbformat version %s unsupported"
-                       (ein:$notebook-nbformat notebook))))))
-    (awhen (cdr (assq 'metadata data))
-      (setf (alist-get 'metadata data)
-            (plist-put it :name (ein:$notebook-notebook-name notebook))))
-    (awhen (ein:$notebook-nbformat-minor notebook)
-      (push `(nbformat_minor . ,it) data))
-    (push `(nbformat . ,(ein:$notebook-nbformat notebook)) data)
-    data))
+  "Return NOTEBOOK as a json-ready alist (see `ein:json-encode-notebook').
+Keys EIN does not own are copied from the notebook as read, so a save
+without edits reproduces it (contracts/notebook-roundtrip.md G2-G9)."
+  (let* ((raw (ein:$notebook-raw notebook))
+         (minor (ein:$notebook-nbformat-minor notebook))
+         (rest (cl-loop for (k v) on raw by #'cddr
+                        unless (memq k '(:nbformat :nbformat_minor :metadata :cells))
+                        collect (cons (intern (substring (symbol-name k) 1)) v))))
+    `((nbformat . 4)
+      ;; Cells always carry ids, which nbformat < 4.5 forbids: G9(b).
+      (nbformat_minor . ,(if (and (natnump minor) (>= minor 5)) minor 5))
+      ,@(ein:write-nbformat4-worksheets notebook)
+      ,@rest)))
 
 
 (defun ein:write-nbformat3-worksheets (notebook)
@@ -505,14 +571,20 @@ This is equivalent to do ``C-c`` in the console program."
 (defun ein:write-nbformat4-worksheets (notebook)
   (let ((all-cells (cl-loop for ws in (ein:$notebook-worksheets notebook)
                          for i from 0
-                         append (ein:worksheet-to-nb4-json ws i))))
-    ;; should be in notebook constructor, not here
-    (awhen (ein:$notebook-kernelspec notebook)
-      (setf (ein:$notebook-metadata notebook)
-            (plist-put (ein:$notebook-metadata notebook)
-                       :kernelspec (ein:notebook--spec-insert-name
-                                    (ein:$kernelspec-name it) (ein:$kernelspec-spec it)))))
-    `((metadata . ,(ein:$notebook-metadata notebook))
+                         append (ein:worksheet-to-nb4-json ws i)))
+        (raw-cells (plist-get (ein:$notebook-raw notebook) :cells)))
+    ;; A notebook read with no cells is shown with one blank code cell
+    ;; to type in; while it stays blank it is not part of the notebook.
+    (when (and raw-cells (zerop (length raw-cells))
+               (= 1 (length all-cells))
+               (let ((cell (car all-cells)))
+                 (and (equal (alist-get 'cell_type cell) "code")
+                      (equal (alist-get 'source cell) "")
+                      (zerop (length (alist-get 'outputs cell))))))
+      (setq all-cells nil))
+    `((metadata . ,(ein:json-prefer-raw
+                    (ein:$notebook-metadata notebook)
+                    (plist-get (ein:$notebook-raw notebook) :metadata)))
       (cells . ,(apply #'vector all-cells)))))
 
 (defun ein:notebook-save-notebook (notebook &optional callback cbargs errback)
@@ -522,14 +594,65 @@ This is equivalent to do ``C-c`` in the console program."
           (run-hooks 'before-save-hook)))
     (error (ein:log 'warn "ein:notebook-save-notebook: Saving despite '%s'."
                     (error-message-string err))))
+  ;; Build (and encode) the body before any request: a notebook that
+  ;; cannot be encoded signals here and stays modified (T069).
   (let ((content (ein:content-from-notebook notebook)))
-    (ein:events-trigger (ein:$notebook-events notebook)
-                        'notebook_saving.Notebook)
-    (ein:content-save content
-                      #'ein:notebook-save-notebook-success
-                      (list notebook callback cbargs)
-                      #'ein:notebook-save-notebook-error
-                      (list notebook errback))))
+    (ein:content-to-json content)
+    (ein:notebook--check-conflict
+     notebook
+     (lambda ()
+       (ein:events-trigger (ein:$notebook-events notebook)
+                           'notebook_saving.Notebook)
+       (ein:content-save content
+                         (lambda (&rest args)
+                           (setf (ein:$notebook-last-modified notebook)
+                                 (ein:$content-last-modified content))
+                           (apply #'ein:notebook-save-notebook-success args))
+                         (list notebook callback cbargs)
+                         #'ein:notebook-save-notebook-error
+                         (list notebook errback))))))
+
+(defun ein:notebook--confirm-overwrite (notebook)
+  "Ask what to do about NOTEBOOK having changed on the server.
+Return `overwrite', `reload' or `cancel'."
+  (pcase (car (read-multiple-choice
+               (format "%s changed on the server since it was opened or saved"
+                       (ein:$notebook-notebook-name notebook))
+               '((?o "overwrite" "Replace the server copy with this buffer")
+                 (?r "reload" "Discard local edits and reopen from the server")
+                 (?c "cancel" "Do not save; keep the buffer modified"))))
+    (?o 'overwrite)
+    (?r 'reload)
+    (_ 'cancel)))
+
+(defun ein:notebook--reload (notebook)
+  "Reopen NOTEBOOK from the server after confirming loss of local edits."
+  (when (yes-or-no-p "Discard local edits and reopen from the server? ")
+    (let ((url-or-port (ein:$notebook-url-or-port notebook))
+          (path (ein:$notebook-notebook-path notebook)))
+      (dolist (ws (ein:$notebook-worksheets notebook))
+        (ein:worksheet-set-modified-p ws nil))
+      (setf (ein:$notebook-dirty notebook) nil)
+      (ein:notebook-close notebook
+                          (lambda () (ein:notebook-open url-or-port path))))))
+
+(defun ein:notebook--check-conflict (notebook proceed)
+  "Call PROCEED unless NOTEBOOK changed on the server and the user declines.
+Compares the server's `last_modified' with the value recorded at open
+or at the last save (T070).  Without a recorded value, just PROCEED."
+  (let ((recorded (ein:$notebook-last-modified notebook)))
+    (if (null recorded)
+        (funcall proceed)
+      (ein:content-query-last-modified
+       (ein:$notebook-url-or-port notebook)
+       (ein:$notebook-notebook-path notebook)
+       (lambda (current)
+         (if (or (null current) (equal current recorded))
+             (funcall proceed)
+           (pcase (ein:notebook--confirm-overwrite notebook)
+             ('overwrite (funcall proceed))
+             ('reload (ein:notebook--reload notebook))
+             (_ (message "Save cancelled; notebook still modified")))))))))
 
 (defun ein:notebook-save-notebook-command ()
   "Save the notebook."
@@ -557,13 +680,20 @@ This is equivalent to do ``C-c`` in the console program."
 ;;    This should save the latest WS0.  To do so, WS0 at the point (2)
 ;;    must be cached in the worksheet slot `:saved-cells'.
 
-(cl-defun ein:notebook-save-notebook-error (notebook &key symbol-status
-                                                     &allow-other-keys)
+(cl-defun ein:notebook-save-notebook-error (notebook &optional errback
+                                            &key reason symbol-status
+                                            &allow-other-keys)
+  "Report a failed save of NOTEBOOK; it stays modified.  Then call ERRBACK."
   (if (eq symbol-status 'user-cancel)
       (ein:log 'info "Cancelled save.")
-    (ein:log 'warn "Failed saving notebook!")
-    (ein:events-trigger (ein:$notebook-events notebook)
-                        'notebook_save_failed.Notebook)))
+    (let ((msg (format "Save failed (%s); notebook still modified — retry with C-x C-s"
+                       (or reason "unknown error"))))
+      (ein:log 'warn "%s" msg)
+      (ein:events-trigger (ein:$notebook-events notebook)
+                          'notebook_save_failed.Notebook)
+      (message "%s" msg)))
+  (when errback
+    (funcall errback)))
 
 (defun ein:notebook-rename-command (path)
   "Rename current notebook and save it immediately.

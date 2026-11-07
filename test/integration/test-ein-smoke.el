@@ -116,5 +116,73 @@ Return PRED's final value."
         (should (equal (alist-get 'tags (alist-get 'metadata (nth 1 (alist-get 'cells saved))))
                        '("keep-tag")))))))
 
+(defun ein:testing-upload (url token path json)
+  "PUT the notebook JSON string as PATH on URL; return the HTTP status."
+  (let ((url-request-method "PUT")
+        (url-request-extra-headers
+         `(("Authorization" . ,(concat "token " token))
+           ("Content-Type" . "application/json")))
+        (url-request-data
+         (encode-coding-string
+          (format "{\"type\": \"notebook\", \"format\": \"json\", \"content\": %s}" json)
+          'utf-8))
+        (url-show-status nil))
+    (let ((buf (url-retrieve-synchronously
+                (concat (file-name-as-directory url) "api/contents/" path) t t 10)))
+      (prog1 (with-current-buffer buf url-http-response-status)
+        (kill-buffer buf)))))
+
+(defun ein:testing-file-string (file)
+  (with-temp-buffer
+    (insert-file-contents file)
+    (buffer-string)))
+
+(ert-deftest ein:integration-corpus-roundtrip ()
+  "T061, SC-003 live: upload each corpus notebook, open, save unedited,
+and compare the server's file before and after."
+  :tags '(:integration)
+  (ein:testing-with-server (url token)
+    (let ((ein:jupyter-server-use-subcommand "server")
+          (corpus (directory-files (file-name-directory
+                                    (ein:testing-fixture "smoke.ipynb"))
+                                   nil "\\.ipynb\\'"))
+          (logged nil))
+      (cl-letf (((symbol-function 'read-passwd)
+                 (lambda (&rest _) (error "Unexpected password prompt"))))
+        (ein:notebooklist-login (directory-file-name url)
+                                (lambda (&rest _) (setq logged t)) nil nil token))
+      (should (ein:testing-wait-until (lambda () logged) 20))
+      (dolist (name corpus)
+        (let ((file (expand-file-name name ein:testing-server-dir))
+              notebook saved)
+          (should (= 201 (ein:testing-upload
+                          url token name
+                          (ein:testing-file-string (ein:testing-fixture name)))))
+          (let ((before (ein:testing-file-string file)))
+            (unwind-protect
+                (progn
+                  (ein:notebook-open (ein:url (directory-file-name url)) name nil
+                                     (lambda (nb &rest _) (setq notebook nb)) nil t)
+                  (should (ein:testing-wait-until (lambda () notebook) 30))
+                  (ein:notebook-save-notebook notebook (lambda (&rest _) (setq saved t)))
+                  (should (ein:testing-wait-until (lambda () saved) 20)))
+              (when notebook
+                (ignore-errors
+                  (ein:kernel-delete-session nil :kernel (ein:$notebook-kernel notebook)))
+                (ein:testing-kill-notebook notebook)))
+            (let ((after (ein:testing-file-string file)))
+              (unless (ein:testing-json-semantic-equal
+                       before (if (equal name "nb44-no-ids.ipynb")
+                                  (ein:testing-g9-normalize after)
+                                after))
+                (ert-fail (list name :before before :after after))))
+            (when (alist-get 'nbformat_valid
+                             (alist-get (intern name)
+                                        (json-parse-string
+                                         (ein:testing-file-string
+                                          (ein:testing-fixture "manifest.json"))
+                                         :object-type 'alist :false-object nil)))
+              (ein:testing-nbformat-validate file))))))))
+
 (provide 'test-ein-smoke)
 ;;; test-ein-smoke.el ends here

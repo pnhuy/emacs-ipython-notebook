@@ -67,7 +67,7 @@ ERRBACK of arity 1 for the contents."
   (ein:query-singleton-ajax
    (ein:notebooklist-url url-or-port path)
    :type "GET"
-   :parser #'ein:json-read
+   :parser #'ein:json-read-faithful
    :complete (apply-partially #'ein:content-query-contents--complete url-or-port path)
    :success (apply-partially #'ein:content-query-contents--success url-or-port path callback)
    :error (apply-partially #'ein:content-query-contents--error url-or-port path callback errback iteration)))
@@ -114,12 +114,17 @@ ERRBACK of arity 1 for the contents."
                            0
                            (or (cl-position ?/ (ein:$content-path content) :from-end t)
                                0)))))
-    (ignore-errors
-      (ein:json-encode `((type . ,(ein:$content-type content))
-                         (name . ,(ein:$content-name content))
-                         (path . ,path)
-                         (format . ,(or (ein:$content-format content) "json"))
-                         (content ,@(ein:$content-raw-content content)))))))
+    (condition-case err
+        (ein:json-encode-notebook
+         `((type . ,(ein:$content-type content))
+           (name . ,(ein:$content-name content))
+           (path . ,path)
+           (format . ,(or (ein:$content-format content) "json"))
+           (content ,@(ein:$content-raw-content content))))
+      ;; Never send a partial body: the server would overwrite the file.
+      (error
+       (user-error "Save aborted: notebook could not be encoded (%s).  \
+Buffer kept modified; fix and retry" (error-message-string err))))))
 
 (defun ein:content-from-notebook (nb)
   (let ((nb-content (ein:notebook-to-json nb)))
@@ -142,14 +147,22 @@ ERRBACK of arity 1 for the contents."
     nil))
 
 (defun ein:new-content (url-or-port path data)
+  "Make an `ein:$content' from DATA, a contents API model.
+DATA may come from `ein:json-read-faithful' (null as `:null'): for a
+notebook the faithful document is kept in `ein:$content-json' and every
+other field sees null as nil."
   ;; data is like (:size 72 :content nil :writable t :path Untitled7.ipynb :name Untitled7.ipynb :type notebook)
-  (let ((content (make-ein:$content
-                  :url-or-port url-or-port
-                  :notebook-api-version (ein:notebook-api-version-numeric url-or-port)
-                  :path path))
-        (raw-content (if (vectorp (plist-get data :content))
-                         (append (plist-get data :content) nil)
-                       (plist-get data :content))))
+  (let* ((faithful data)
+         (data (ein:json-nilify data))
+         (content (make-ein:$content
+                   :url-or-port url-or-port
+                   :notebook-api-version (ein:notebook-api-version-numeric url-or-port)
+                   :path path))
+         (raw-content (if (vectorp (plist-get data :content))
+                          (append (plist-get data :content) nil)
+                        (plist-get data :content))))
+    (when (equal (plist-get data :type) "notebook")
+      (setf (ein:$content-json content) (plist-get faithful :content)))
     (setf (ein:$content-name content) (plist-get data :name)
           (ein:$content-path content) (plist-get data :path)
           (ein:$content-type content) (plist-get data :type)
@@ -235,21 +248,51 @@ ERRBACK of arity 1 for the contents."
    (ein:content-url content)
    :type "PUT"
    :headers '(("Content-Type" . "application/json"))
-   :data (encode-coding-string (ein:content-to-json content) buffer-file-coding-system)
-   :success (apply-partially #'ein:content-save-success callback cbargs)
+   ;; Encode first: an encoding failure signals before anything is sent.
+   :data (encode-coding-string (ein:content-to-json content) 'utf-8)
+   :parser #'ein:json-read
+   :success (apply-partially #'ein:content-save-success content callback cbargs)
    :error (apply-partially #'ein:content-save-error
                            (ein:content-url content) errcb errcbargs)))
 
-(cl-defun ein:content-save-success (callback cbargs &key _status _response &allow-other-keys)
+(cl-defun ein:content-save-success (content callback cbargs
+                                    &key data &allow-other-keys)
+  "Record the server's `last_modified' in CONTENT, then apply CALLBACK."
+  (awhen (and (listp data) (plist-get data :last_modified))
+    (setf (ein:$content-last-modified content) it))
   (when callback
     (apply callback cbargs)))
 
-(cl-defun ein:content-save-error (url errcb errcbargs &key response &allow-other-keys)
-  (ein:log 'error
-    "ein:content-save-error: %s %s."
-    url (error-message-string (request-response-error-thrown response)))
-  (when errcb
-    (apply errcb errcbargs)))
+(defun ein:content--error-reason (response symbol-status)
+  "Short human-readable reason for a failed request."
+  (let ((code (and response (request-response-status-code response)))
+        (thrown (and response (request-response-error-thrown response))))
+    (cond (code (format "HTTP %s" code))
+          ((consp thrown) (error-message-string thrown))
+          (symbol-status (format "%s" symbol-status))
+          (t "unknown error"))))
+
+(cl-defun ein:content-save-error (url errcb errcbargs
+                                  &key response symbol-status &allow-other-keys)
+  "Log the failed save of URL and apply ERRCB to ERRCBARGS and `:reason'."
+  (let ((reason (ein:content--error-reason response symbol-status)))
+    (ein:log 'warn "ein:content-save-error: %s %s" url reason)
+    (when errcb
+      (apply errcb (append errcbargs
+                           (list :reason reason :symbol-status symbol-status))))))
+
+(defun ein:content-query-last-modified (url-or-port path callback)
+  "Call CALLBACK with the server's `last_modified' for PATH, or nil.
+Uses GET ?content=0, which does not transfer the notebook."
+  (ein:query-singleton-ajax
+   (concat (ein:notebooklist-url url-or-port path) "?content=0")
+   :type "GET"
+   :parser #'ein:json-read
+   :success (cl-function
+             (lambda (&key data &allow-other-keys)
+               (funcall callback (and (listp data) (plist-get data :last_modified)))))
+   :error (cl-function
+           (lambda (&rest _) (funcall callback nil)))))
 
 (defun ein:content-rename (content new-path &optional callback cbargs)
   (ein:query-singleton-ajax

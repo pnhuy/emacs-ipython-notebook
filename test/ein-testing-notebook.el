@@ -33,7 +33,9 @@
 (defvar ein:testing-notebook-dummy-url "DUMMY-URL")
 
 (defun ein:testing-notebook-from-json (json-string)
-  (let* ((data (ein:with-json-setting (json-read-from-string json-string))) ;; intentionally not ein:json-read-from-string
+  (let* ((data (with-temp-buffer       ; parse as production does
+                 (insert json-string)
+                 (ein:json-read-faithful)))
          (path (plist-get data :path))
          (kernelspec (make-ein:$kernelspec :name "python" :language "python"))
          (content (make-ein:$content :url-or-port ein:testing-notebook-dummy-url
@@ -84,11 +86,41 @@ single string before EIN sees it."
                    (ein:testing-notebook--rejoin
                     (with-temp-buffer
                       (insert-file-contents path)
-                      (json-parse-buffer :null-object :null
-                                         :false-object :false))))))
+                      ;; Same message as `ein:notebook--parse'.
+                      (condition-case err
+                          (json-parse-buffer :null-object :null
+                                             :false-object :false)
+                        (json-error
+                         (user-error "Notebook is not valid JSON (%s)"
+                                     (error-message-string err)))))))))
     (ein:testing-notebook-from-json
      (format "{\"path\": %s, \"name\": %s, \"type\": \"notebook\", \"format\": \"json\", \"mimetype\": null, \"writable\": true, \"content\": %s}"
              (json-encode name) (json-encode name) content))))
+
+(defun ein:testing-notebook-kill (buffer)
+  "Kill notebook BUFFER without prompting."
+  (when (buffer-live-p buffer)
+    (let ((kill-buffer-query-functions nil))
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer))))
+
+(defmacro ein:testing-with-notebook-file (path &rest body)
+  "Open the notebook file PATH, run BODY in its buffer, then kill it."
+  (declare (indent 1))
+  (let ((buf (make-symbol "buf")))
+    `(let ((,buf (ein:testing-notebook-from-file ,path)))
+       (unwind-protect
+           (with-current-buffer ,buf ,@body)
+         (ein:testing-notebook-kill ,buf)))))
+
+(defmacro ein:testing-with-notebook-json (json &rest body)
+  "Like `ein:testing-with-notebook-file' for the notebook JSON string."
+  (declare (indent 1))
+  (let ((file (make-symbol "file")))
+    `(let ((,file (make-temp-file "ein-test-" nil ".ipynb" ,json)))
+       (unwind-protect
+           (ein:testing-with-notebook-file ,file ,@body)
+         (delete-file ,file)))))
 
 (defun ein:testing-notebook-make-data (name path cells)
   (setq cells

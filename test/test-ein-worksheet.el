@@ -37,3 +37,41 @@
 (ert-deftest ein:worksheet-to-json/example-data-with-metadata ()
   (ein:testing-worksheet-to-json ein:testing-worksheet-example-data
                                  '(:name "Worksheet name")))
+
+;;; Short and duplicate cell ids (T058)
+
+(require 'ein-testing-notebook)
+
+(defun eintest:worksheet-notebook-json (&rest ids)
+  (json-serialize
+   `((cells . ,(vconcat
+                (mapcar (lambda (id)
+                          `((cell_type . "code") (id . ,id) (metadata . ,(make-hash-table))
+                            (source . "x = 1") (outputs . []) (execution_count . :null)))
+                        ids)))
+     (metadata . ,(make-hash-table)) (nbformat . 4) (nbformat_minor . 5))
+   :null-object :null))
+
+(ert-deftest ein:worksheet-short-id ()
+  "Ids shorter than five characters load, render and hash without error."
+  (ein:testing-with-notebook-json (eintest:worksheet-notebook-json "a" "bc")
+    (let ((cells (ein:worksheet-get-cells ein:%worksheet%)))
+      (should (equal (mapcar #'ein:cell-id cells) '("a" "bc")))
+      (should (equal (mapcar #'ein:worksheet--unique-enough-cell-id cells) '(a bc)))
+      ;; Editing runs the which-cell hook, which hashes ids.
+      (ein:cell-goto (car cells))
+      (insert "y")
+      (should (string-prefix-p "y" (ein:cell-get-text (car cells)))))))
+
+(ert-deftest ein:worksheet-duplicate-ids-repaired ()
+  "Duplicate ids on load are made unique and a warning is logged."
+  (let (warnings)
+    (cl-letf* ((orig (symbol-function 'ein:log-wrapper))
+               ((symbol-function 'ein:log-wrapper)
+                (lambda (level func)
+                  (when (eq level 'warn) (push (funcall func) warnings))
+                  (funcall orig level func))))
+      (ein:testing-with-notebook-json (eintest:worksheet-notebook-json "dup" "dup" "dup")
+        (should (equal (mapcar #'ein:cell-id (ein:worksheet-get-cells ein:%worksheet%))
+                       '("dup" "dup-1" "dup-2")))))
+    (should (cl-some (lambda (w) (string-match-p "Duplicate cell id dup" w)) warnings))))

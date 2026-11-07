@@ -76,7 +76,8 @@ buffer-undo-list is still under the threshold.")
   "Gets the first five characters of an md5sum.
 How far I can get without r collisions follows a negative
 binomial with p=1e-6 (should go pretty far)."
-  (intern (substring (slot-value cell 'cell-id) 0 5)))
+  (let ((id (slot-value cell 'cell-id)))
+    (intern (substring id 0 (min 5 (length id))))))
 
 (defun ein:worksheet--which-cell-hook (change-beg change-end _prev-len)
   "This is a costly after-change-functions hook.
@@ -692,7 +693,13 @@ kill-ring of Emacs (kill-ring for texts)."
     (ein:kill-new cells)))
 
 (defun ein:worksheet-insert-clone (ws cell pivot up &optional focus)
-  (let* ((clone (ein:cell-copy cell))
+  "Insert a clone of CELL next to PIVOT (UP is \"above\" or \"below\").
+The clone keeps CELL's id (move, or yank after kill) unless another
+cell in WS already has it (repeated yank); then it gets a fresh id."
+  (let* ((clone (ein:cell-convert cell (slot-value cell 'cell-type)))
+         (taken (mapcar #'ein:cell-id (ein:worksheet-get-cells ws)))
+         (_ (when (member (ein:cell-id clone) taken)
+              (setf (slot-value clone 'cell-id) (ein:cell--fresh-id taken))))
          (clone-buffer (ein:cell-buffer clone))
          (clone-buffer-base (buffer-base-buffer clone-buffer))
          (ws-buffer (ewoc-buffer (ein:worksheet--ewoc ws))))

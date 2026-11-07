@@ -267,6 +267,46 @@ See: http://api.jquery.com/jQuery.ajax/"
       (json-serialize obj :null-object json-null :false-object json-false)
     (json-encode obj)))
 
+(defun ein:json-read-faithful ()
+  "Like `ein:json-read', but JSON null reads as `:null'.
+Used for notebook documents, where null and {} must stay distinct so
+that saving reproduces the input (contracts/notebook-roundtrip.md G2)."
+  (goto-char (point-max))
+  (backward-sexp)
+  (json-parse-buffer :object-type 'plist :array-type 'array
+                     :null-object :null :false-object json-false))
+
+(defun ein:json-nilify (obj)
+  "Return a copy of OBJ read by `ein:json-read-faithful' with `:null' as nil.
+This is the representation the rest of EIN expects."
+  (cond ((eq obj :null) nil)
+        ((vectorp obj) (cl-map 'vector #'ein:json-nilify obj))
+        ((consp obj) (mapcar #'ein:json-nilify obj))
+        (t obj)))
+
+(defun ein:json-prefer-raw (current raw)
+  "Return RAW wherever it is equivalent to CURRENT, else CURRENT.
+CURRENT is EIN's (null as nil) view of a JSON value; RAW is the value
+as read by `ein:json-read-faithful'.  Objects (plists) are merged key
+by key, so editing one key keeps the original form of the others."
+  (cond ((equal current (ein:json-nilify raw)) raw)
+        ((and (consp current) (keywordp (car current))
+              (consp raw) (keywordp (car raw)))
+         (cl-loop for (k v) on current by #'cddr
+                  nconc (list k (if (plist-member raw k)
+                                    (ein:json-prefer-raw v (plist-get raw k))
+                                  v))))
+        (t current)))
+
+(defun ein:json-encode-notebook (obj)
+  "Encode notebook OBJ as a JSON string.
+`:null' is JSON null, `json-false' is false, nil is {}.  Signal an
+error (never return a partial string) when OBJ cannot be encoded."
+  (if (fboundp 'json-serialize)
+      (json-serialize obj :null-object :null :false-object json-false)
+    (let ((json-null :null))
+      (json-encode obj))))
+
 (defsubst ein:json-any-to-bool (obj)
   (if (and obj (not (eq obj json-false))) t json-false))
 

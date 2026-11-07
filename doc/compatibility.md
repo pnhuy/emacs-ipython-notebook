@@ -533,3 +533,39 @@ To reproduce:
 `emacs -Q -l test/bench/ein-nbview-bench.el --eval '(ein:nbview-dev-benchmark "/tmp/bench300.ipynb")'`.
 The bench file finds `lisp/`, `test/` and `.deps/elpa` relative to
 itself.
+
+## Final audit (SC-011)
+
+Run on 2026-11-07 (T162). The audit was taken with
+`sh tools/audit.sh --user-init > doc/audit/final-2026-11-07.txt`, the
+same mode as the baseline.
+
+`diff` against `doc/audit/baseline-2026-11-07.txt` differs only in:
+
+- the timestamp;
+- the commit hash;
+- the dirty-file count, which is the new audit file itself.
+
+Everything else is unchanged:
+
+- Emacs, Jupyter, Python and the kernelspecs;
+- no `ein-*` in `~/.emacs.d/elpa` and no `.elc` in `lisp/`;
+- the real configuration still resolves `ein` to this clone's
+  `lisp/ein.el`.
+
+Every `working` row in "Findings" and "Byte-compilation warnings" was
+checked against the tests it cites:
+
+- Every cited test exists. That includes the generated
+  `ein:roundtrip-*` tests, one per corpus notebook.
+- `make test-unit` ran 392 tests; 392 passed.
+- `make test-integration` ran 15 tests; 15 passed against jupyter_server.
+- `make test-compile` (warnings as errors) and `make lint` are clean.
+- `checkdoc` is clean on `lisp/ein-view.el`, `lisp/ein-nbview*.el` and
+  `lisp/ein-latex.el`.
+
+Rows whose evidence is a code symbol rather than a test are covered by
+the compile gate and by the files' own tests. These rows are W04, W05,
+W07 and W08.
+
+No regressions.

@@ -404,8 +404,10 @@ Notes:
 
 - No network access happens by default. Remote images show as an
   `[image ALT]` link until `ein:nbview-fetch-remote-images` is set.
-- Local image files load only from inside the notebook's directory on a
-  local server.
+- Local image files load only from inside the notebook's directory, and
+  only for a server started by EIN (`ein:run`), whose root directory is
+  known. With `ein:login` to a server started elsewhere they show as
+  `[image ALT]` (seen in T163).
 - Raw HTML in Markdown is shown as text and is never interpreted.
 - LaTeX runs with `-no-shell-escape` in a private temporary directory,
   which is deleted after each job. Results are cached in
@@ -596,3 +598,62 @@ the compile gate and by the files' own tests. These rows are W04, W05,
 W07 and W08.
 
 No regressions.
+
+## Quickstart walkthrough (T163)
+
+Run on 2026-11-07 against the quickstart, §1 to §8. Environment: GNU
+Emacs 31.1 (`emacs -Q`, graphic frame on Xvfb, and `emacs -nw` in
+tmux at 110×50, `TERM=xterm-256color`), jupyter_server 2.21.1,
+ipykernel 7.4.0, matplotlib 3.11.2, nbformat 5.11.1. The server was
+started outside Emacs and reached with `M-x ein:login` and a token.
+Keys were sent as X or tmux key events. State was read with
+`emacsclient`.
+
+The test notebook had six cells: a Markdown heading, `print(os.sep)`
+with a saved output, a Markdown cell with a heading, a table,
+checkboxes, a local image and inline LaTeX, a matplotlib plot,
+`1 / 0` and `x = 1`.
+
+| step (§6) | result | notes |
+|---|---|---|
+| 1. log in and open | pass | 6.4 s from `M-x ein:login` to a live kernel |
+| 2. layout, `j`/`k`/`RET`, light and dark themes | pass (after fix 4) | LaTeX was black on `modus-vivendi` |
+| 3. no insertion in command state; indent, highlighting, `completion-at-point` | pass | `w e r t u i p` are all `undefined`; `import o` offers `os` |
+| 4. Markdown preview: click edits, `Esc` restores | pass (after fixes 3 and 5) | arrow keys and clicks cause no re-render |
+| 5. `S-RET` plot and traceback, `o` collapses | pass | PNG inline, traceback readable, `[outputs hidden]` |
+| 6. `d d`, `z`; `M-<down>`, `C-/` | pass | outputs and count return; invariants hold after each step |
+| 7. `C-x C-s`, `nbformat.validate` | pass | cell ids kept; PNG and error outputs saved |
+| 8. terminal | pass | see below |
+| 9. classic fallback | pass | see below |
+
+Fixes 3, 4 and 5 are in "Markdown" above. The walkthrough also found
+C38 (entry commands without generated autoloads).
+
+SC-002: a scripted run took 8.3 s from `M-x ein:login` to a saved
+file (log in, open, edit, run, save). A manual run took 103.7 s; both
+are under the 2-minute target. The scripted run clicks `[Open]` in
+the notebook list, so it is not evidence for SC-005 (keyboard only).
+
+Terminal (step 8): the toolbar shows text buttons, cells show `▎` bars
+and box-drawing rules, the table uses box glyphs, LaTeX shows as
+`e^{iπ} = -1`, and the plot shows its `text/plain` form `<Figure size
+640x480 with 1 Axes>`. `j`, `RET` and `ESC ESC` work. A single `ESC`
+is the Meta prefix, so `ESC j` runs `M-j` (documented under "Command
+and edit states").
+
+Classic fallback (step 9): two copies of the notebook were opened, one
+in each view. Each got the same edits: append a line to the last cell,
+delete the `1 / 0` cell, and add a Markdown cell below the first. Both
+saved files validate. They are identical except for the new cell's
+`id`, which is random for each new cell. Kept cells keep their ids.
+
+Other sections: §2 and §3 (`make test-compile`, `make lint`, `make
+test-unit`: 397 tests, 397 passed) and §4 (`make test-integration`:
+15 tests, 15 passed) were re-run after the fixes. §7 and §8 are recorded under "Performance" and
+"Final audit".
+
+Observations, not fixed:
+
+- After `[Open]` in the notebook list, focus stays in the list window.
+- Footer rules are shorter than header rules.
+- `M-x ein:login` takes about 3 s to show the URL prompt.

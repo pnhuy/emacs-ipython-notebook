@@ -523,6 +523,8 @@ A click in a source places point there and enters edit state; a click
 on a header, footer or output selects the cell in command state.  With
 `ein:nbview-mouse' nil, only point moves."
   (interactive "e")
+  (if-let* ((url (ein:nbview--event-url event)))
+      (browse-url url)
   (if (not ein:nbview-mouse)
       (mouse-set-point event)
     (let* ((posn (event-start event))
@@ -544,7 +546,19 @@ on a header, footer or output selects the cell in command state.  With
                 (ein:nbview--goto-source view cell))
             (goto-char pos)
             (ein:view-select-cell view cell)
-            (ein:nbview-edit-cell)))))))
+            (ein:nbview-edit-cell))))))))
+
+(defun ein:nbview--event-url (event)
+  "The `ein-url' of the link (in a preview or output) clicked by EVENT."
+  (let* ((posn (event-start event))
+         (str (posn-string posn)))
+    (or (and (stringp (car-safe str)) (cdr str)
+             (< (cdr str) (length (car str)))
+             (get-text-property (cdr str) 'ein-url (car str)))
+        (and (integer-or-marker-p (posn-point posn))
+             (windowp (posn-window posn))
+             (with-current-buffer (window-buffer (posn-window posn))
+               (get-char-property (posn-point posn) 'ein-url))))))
 
 (provide 'ein-nbview-edit)
 

@@ -95,7 +95,10 @@ single string before EIN sees it."
                                      (error-message-string err)))))))))
     (ein:testing-notebook-from-json
      (format "{\"path\": %s, \"name\": %s, \"type\": \"notebook\", \"format\": \"json\", \"mimetype\": null, \"writable\": true, \"content\": %s}"
-             (json-encode name) (json-encode name) content))))
+             ;; `json-serialize' returns unibyte UTF-8: decode it, or
+             ;; non-ASCII text becomes raw bytes in the buffer.
+             (json-encode name) (json-encode name)
+             (decode-coding-string content 'utf-8)))))
 
 (defun ein:testing-notebook-kill (buffer)
   "Kill notebook BUFFER without prompting."

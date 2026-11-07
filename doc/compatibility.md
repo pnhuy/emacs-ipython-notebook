@@ -227,7 +227,10 @@ Kernel completion (C37) is the supported completion mechanism.
 - On Windows, private temporary directories cannot be restricted to mode
   0700 the same way (plan Complexity Tracking); behaviour there is `untested`.
 - Inline images require a graphical Emacs. Terminal Emacs shows placeholders.
-- The LaTeX preview uses `latex` plus `dvisvgm` or `dvipng` when present.
+- The LaTeX preview uses `latex` plus `dvisvgm` or `dvipng` when present
+  (`ein:latex-render-method` `auto`). Without them, or in a terminal, math
+  is shown as Unicode text, and constructs without a Unicode form stay
+  as written.
 
 ## UI review
 
@@ -335,3 +338,51 @@ Terminal notes:
 GUI note: Xvfb has no window manager, so `xdotool key --window` events
 were ignored. XTEST events (`xdotool key` with the pointer over the
 frame) were delivered.
+
+## Markdown
+
+T137 (quickstart §6 step 4, SC-006, FR-027b): the cells view on a
+notebook with a Markdown cell that has headings, emphasis,
+strikethrough, inline code, a link, a table, checkboxes, inline and
+display LaTeX, and a fenced Python block. A second cell had an image
+attachment. Emacs 31.1, TeX Live 2026 `latex` with `dvisvgm` 3.6.1,
+2026-11-07. GUI: `emacs -Q` under Xvfb (`GDK_BACKEND=x11`), with
+screenshots taken by `x-export-frames`. Terminal: `emacs -nw -Q` in tmux
+(100×45, `TERM=xterm-256color`). The screenshots are not committed.
+
+| check | GUI | terminal |
+|---|---|---|
+| headings, bold, italic, strikethrough, code, link | pass | pass (faces) |
+| table drawn with `│` and `┼` | pass | pass |
+| checkboxes | pass (☑ ☐) | pass (`[x]` `[ ]`) |
+| inline `$e^{i\pi}$` and display `$$…$$` math | pass (SVG images) | pass (Unicode text, `e^{iπ}`, `∫₀¹ x² dx`) |
+| fenced code fontified as Python | pass | pass |
+| attachment image | pass (inline image) | pass (`[image x]` placeholder) |
+| `RET` shows the source; the preview overlay is gone | pass | pass |
+| 10 line motions inside the source: no re-render | pass (0) | pass (0) |
+| `Esc` restores the preview with exactly one render | pass | pass |
+| source unchanged and invariants hold afterwards | pass | pass |
+
+Defects found and fixed during the review:
+
+1. The preview was a `display` string on the source. Emacs ignores
+   `display` properties nested in a display string, so images and
+   LaTeX SVGs showed as their fallback text. The preview now hides the
+   source (`invisible`) and shows the rendering as the overlay's
+   `before-string`. `ein:nbview-md-preview-shown` asserts this.
+2. Unmapped scripts lost their inner conversion: `e^{i\pi}` stayed
+   raw. It now renders as `e^{iπ}` (test `ein:latex-text-fallback`).
+
+Notes:
+
+- No network access happens by default. Remote images show as an
+  `[image ALT]` link until `ein:nbview-fetch-remote-images` is set.
+- Local image files load only from inside the notebook's directory on a
+  local server.
+- Raw HTML in Markdown is shown as text and is never interpreted.
+- LaTeX runs with `-no-shell-escape` in a private temporary directory,
+  which is deleted after each job. Results are cached in
+  `ein:latex-cache-directory`.
+- `C-c C-v` (`ein:nbview-toggle-markdown-preview`) turns the preview
+  off in one buffer; `ein:nbview-markdown-preview` turns it off
+  everywhere.

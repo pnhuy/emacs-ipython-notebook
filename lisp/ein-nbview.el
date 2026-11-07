@@ -55,6 +55,7 @@
 (require 'ein-view)
 (require 'ein-cell)
 (require 'ein-nbview-edit)
+(require 'ein-nbview-markdown)
 (require 'ein-completer)
 
 (declare-function ein:kernel-when-ready "ein-kernel")
@@ -64,6 +65,8 @@
 (declare-function ein:notebook-restart-session-command "ein-notebook")
 (declare-function ein:notebook-rename-command "ein-notebook")
 (defvar ein:%worksheet%)
+(defvar ein:%notebook%)
+(declare-function ein:jupyter-running-notebook-directory "ein-jupyter")
 
 ;;; Customization
 
@@ -510,6 +513,111 @@ Do nothing when CELL is not in the buffer."
       (error (ein:log 'warn "ein:nbview--post-command: %s"
                       (error-message-string err))))))
 
+;;; Markdown preview
+
+(defcustom ein:nbview-markdown-preview t
+  "Non-nil: show inactive Markdown cells rendered.
+The rendering is display only; the buffer and the notebook keep the
+Markdown source.  `ein:nbview-toggle-markdown-preview' changes it for
+one buffer."
+  :type 'boolean
+  :group 'ein-nbview
+  :package-version '(ein . "0.18"))
+
+(defun ein:nbview--preview-overlay (view cell)
+  "The overlay previewing CELL in VIEW's buffer, or nil."
+  (with-current-buffer (oref view buffer)
+    (when-let* ((b (ein:nbview--source-bounds view cell)))
+      (cl-find-if (lambda (ov) (and (overlay-get ov 'ein-nbview-preview)
+                                    (= (overlay-start ov) (car b))
+                                    (= (overlay-end ov) (cdr b))))
+                  (overlays-in (car b) (cdr b))))))
+
+(defun ein:nbview--delete-previews (beg end)
+  "Delete the preview overlays within BEG..END."
+  (dolist (ov (overlays-in beg end))
+    (when (overlay-get ov 'ein-nbview-preview)
+      (delete-overlay ov))))
+
+(defun ein:nbview--notebook-directory ()
+  "Local directory of the current notebook, when the server is local."
+  (when-let* ((root (and (fboundp 'ein:jupyter-running-notebook-directory)
+                         (ein:jupyter-running-notebook-directory)))
+              (nb (bound-and-true-p ein:%notebook%))
+              (path (ignore-errors (ein:$notebook-notebook-path nb))))
+    (let ((dir (expand-file-name (or (file-name-directory path) "") root)))
+      (and (file-directory-p dir) dir))))
+
+(defun ein:nbview--preview-context (view cell)
+  "Rendering context of CELL in VIEW (see `ein:nbview-render-markdown')."
+  (let ((window (get-buffer-window (oref view buffer) t)))
+    (list :graphic (display-graphic-p (and window (window-frame window)))
+          :window-width (if window (window-body-width window t) 800)
+          :notebook-dir (ein:nbview--notebook-directory)
+          :attachments (plist-get (ein:oref-safe cell 'raw) :attachments)
+          :owner cell
+          :refresh (lambda ()
+                     (when (buffer-live-p (oref view buffer))
+                       (with-current-buffer (oref view buffer)
+                         (when (ein:nbview--preview-overlay view cell)
+                           (ein:nbview--refresh-preview view cell))))))))
+
+(defun ein:nbview--refresh-preview (view cell &optional leaving)
+  "Show or hide the Markdown preview of CELL in VIEW.
+The preview shows when it is enabled, CELL is a non-empty Markdown cell
+and CELL is not being edited.  LEAVING non-nil means CELL is leaving
+edit state.  A renderer error shows the source in
+`ein:nbview-md-error' and is logged; editing is unaffected."
+  (with-current-buffer (oref view buffer)
+    (when-let* ((b (ein:nbview--source-bounds view cell)))
+      (ein:nbview--delete-previews (car b) (cdr b))
+      (if (and ein:nbview-markdown-preview
+               (ein:markdowncell-p cell)
+               (< (car b) (cdr b))
+               (or leaving
+                   (not (and (eq ein:nbview--state 'edit)
+                             (eq cell (oref view selected))))))
+          (let ((ov (make-overlay (car b) (cdr b) nil t nil))
+                (source (buffer-substring-no-properties (car b) (cdr b))))
+            (overlay-put ov 'ein-nbview-preview t)
+            (overlay-put ov 'evaporate t)
+            (condition-case err
+                ;; Hide the source and show the rendering before it.  A
+                ;; `display' string would not do: Emacs ignores the
+                ;; image `display' properties nested inside it.
+                (let ((render (ein:nbview-render-markdown
+                               source (ein:nbview--preview-context view cell))))
+                  (overlay-put ov 'before-string render)
+                  (overlay-put ov 'invisible t))
+              (error
+               (ein:log 'warn "Markdown preview failed: %s" (error-message-string err))
+               (overlay-put ov 'face 'ein:nbview-md-error))))
+        (ein:latex-cancel cell)))))
+
+(defun ein:nbview--refresh-all-previews (view)
+  "Refresh the preview of every cell of VIEW."
+  (dolist (cell (ein:view-cells view))
+    (ein:nbview--refresh-preview view cell)))
+
+(defun ein:nbview--preview-leave-edit ()
+  "`ein:nbview-leave-edit-hook' function: preview the cell being left."
+  (when-let* ((view ein:nbview--view)
+              (cell ein:nbview--selected))
+    (ein:nbview--refresh-preview view cell t)))
+
+(defun ein:nbview--preview-enter-edit ()
+  "`ein:nbview-enter-edit-hook' function: show the source of the edited cell."
+  (when-let* ((view ein:nbview--view)
+              (cell ein:nbview--selected))
+    (ein:nbview--refresh-preview view cell)))
+
+(defun ein:nbview-toggle-markdown-preview ()
+  "Toggle the Markdown preview in this notebook buffer."
+  (interactive)
+  (setq-local ein:nbview-markdown-preview (not ein:nbview-markdown-preview))
+  (ein:nbview--refresh-all-previews (ein:nbview--current-view))
+  (message "Markdown preview %s" (if ein:nbview-markdown-preview "on" "off")))
+
 ;;; Protocol methods
 
 (cl-defmethod ein:view-buffer ((view ein:nbview))
@@ -525,7 +633,8 @@ Do nothing when CELL is not in the buffer."
       (erase-buffer)
       (dolist (cell (and ws (slot-value ws 'saved-cells)))
         (ein:nbview--render-cell view cell (point-max)))
-      (ein:nbview--ensure-placeholder))
+      (ein:nbview--ensure-placeholder)
+      (ein:nbview--refresh-all-previews view))
     (goto-char (point-min))
     (when-let* ((first (car (ein:view-cells view)))
                 (bounds (ein:nbview--source-bounds view first)))
@@ -554,7 +663,8 @@ Do nothing when CELL is not in the buffer."
         (save-excursion
           (goto-char (car bounds))
           (delete-region (car bounds) (cdr bounds))
-          (insert text)))
+          (insert text))
+        (ein:nbview--refresh-preview view cell))
     (setf (slot-value cell 'input) text)))
 
 (cl-defmethod ein:view-cell-outputs-changed ((view ein:nbview) cell &optional _index)
@@ -582,6 +692,7 @@ Do nothing when CELL is not in the buffer."
                      (1+ (ein:nbview--footer-pos h))
                    (point-min))))
         (ein:nbview--render-cell view cell pos)))
+    (ein:nbview--refresh-preview view cell)
     cell))
 
 (cl-defmethod ein:view-delete-cell ((view ein:nbview) cell)
@@ -589,6 +700,8 @@ Do nothing when CELL is not in the buffer."
     (when-let* ((h (ein:nbview--header-pos view cell))
                 (f (ein:nbview--footer-pos h)))
       (ein:view-cell-text view cell)    ; keep its text for undo-less users
+      (ein:nbview--delete-previews h (1+ f))
+      (ein:latex-cancel cell)
       (ein:nbview--with-structural-change
         (delete-region h (1+ f))
         (ein:nbview--ensure-placeholder)))))
@@ -620,6 +733,8 @@ Do nothing when CELL is not in the buffer."
           (goto-char (+ (ein:nbview--header-pos view cell) offset)))
         ;; Reinsertion collapsed the overlay if it covered the lower cell.
         (ein:nbview--update-selection-overlay view)
+        (ein:nbview--refresh-preview view cell)
+        (ein:nbview--refresh-preview view other)
         t))))
 
 (cl-defmethod ein:view-replace-cell ((view ein:nbview) old new)
@@ -629,6 +744,8 @@ Do nothing when CELL is not in the buffer."
                 (f (ein:nbview--footer-pos h)))
       (let ((offset (and (<= (1+ h) (point) f) (- (point) h))))
         (setf (slot-value new 'input) (ein:view-cell-text view old))
+        (ein:nbview--delete-previews h (1+ f))
+        (ein:latex-cancel old)
         (ein:nbview--with-structural-change
           (delete-region h (1+ f))
           (ein:nbview--render-cell view new h))
@@ -636,6 +753,7 @@ Do nothing when CELL is not in the buffer."
         (when (eq (oref view selected) old)
           (setf (oref view selected) nil)
           (ein:view-select-cell view new))
+        (ein:nbview--refresh-preview view new)
         new))))
 
 (cl-defmethod ein:view-select-cell ((view ein:nbview) cell)
@@ -870,7 +988,7 @@ In edit state, leave it (see `ein:nbview-modal')."
     (ein:nbview-command-state)
     (ein:view-cell-text view cell)
     (if (not (ein:codecell-p cell))
-        (message "Not a code cell")
+        (unless (ein:markdowncell-p cell) (message "Not a code cell"))
       (ein:kernel-when-ready
        (slot-value cell 'kernel)
        (lambda (_kernel)
@@ -916,7 +1034,9 @@ rescan the cell positions and select the cell at point."
         (ein:nbview--decorate-cell view cell))
       (ein:nbview--set-dirty view)
       (setf (oref view selected) nil)
-      (ein:view-select-cell view (ein:nbview--cell-at (point))))))
+      (ein:view-select-cell view (ein:nbview--cell-at (point)))
+      (dolist (cell cells)
+        (ein:nbview--refresh-preview view cell)))))
 
 (defun ein:nbview--call-undo (fn arg)
   "Call the undo command FN with ARG across read-only cell boundaries."
@@ -975,6 +1095,7 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "C-c C-s" #'ein:nbview-split-cell
   "C-c RET" #'ein:nbview-merge-cell
   "C-c C-t" #'ein:nbview-toggle-cell-type
+  "C-c C-v" #'ein:nbview-toggle-markdown-preview
   "M-RET" #'ein:nbview-run-and-advance
   "C-c C-z" #'ein:notebook-kernel-interrupt-command
   "C-c C-r" #'ein:notebook-reconnect-session-command
@@ -1011,6 +1132,8 @@ BUFFER defaults to the current buffer.  Return FN's value."
   (add-hook 'kill-buffer-hook #'ein:nbview--kill-shadow-buffers nil t)
   (jit-lock-register #'ein:nbview--jit-decorate)
   (add-hook 'post-command-hook #'ein:nbview--post-command nil t)
+  (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--preview-enter-edit nil t)
+  (add-hook 'ein:nbview-leave-edit-hook #'ein:nbview--preview-leave-edit nil t)
   (setq buffer-undo-list nil))
 
 (defun ein:nbview-open (notebook ws buffer)
@@ -1024,6 +1147,8 @@ BUFFER defaults to the current buffer.  Return FN's value."
       (setq ein:%worksheet% ws)
       (ein:view-render-notebook view notebook)
       (ein:nbview-modes-setup)
+      (when-let* ((cell (oref view selected)))
+        (ein:nbview--refresh-preview view cell))
       (set-buffer-modified-p nil)
       (setq buffer-undo-list nil)
       view)))

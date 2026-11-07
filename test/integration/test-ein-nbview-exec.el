@@ -144,5 +144,49 @@ another cell runs."
                 (should (ein:nbview--check-invariants)))))
         (ein:testing-kill-notebook notebook)))))
 
+(ert-deftest ein:integration-nbview-markdown-attachments ()
+  "T131: previewing and editing a markdown cell keeps its attachments."
+  :tags '(:integration)
+  (ein:testing-with-server (url token)
+    (let ((ein:jupyter-server-use-subcommand "server")
+          (ein:notebook-view 'cells)
+          (file (expand-file-name "attach.ipynb" ein:testing-server-dir))
+          (original (json-parse-string
+                     (with-temp-buffer
+                       (insert-file-contents (ein:testing-fixture "attachments.ipynb"))
+                       (buffer-string))
+                     :object-type 'alist :array-type 'list))
+          notebook)
+      (copy-file (ein:testing-fixture "attachments.ipynb") file)
+      (unwind-protect
+          (progn
+            (setq notebook (ein:testing-login-and-open
+                            (directory-file-name url) token "attach.ipynb"))
+            (with-current-buffer (ein:notebook-buffer notebook)
+              (let* ((view ein:nbview--view)
+                     (md (car (ein:view-cells view))))
+                (should (ein:markdowncell-p md))
+                (should (ein:nbview--preview-overlay view md))
+                (ein:nbview-select-cell md)
+                (ein:nbview-edit-cell)
+                (should-not (ein:nbview--preview-overlay view md))
+                (ein:nbview-command-state)
+                (should (overlay-get (ein:nbview--preview-overlay view md) 'before-string))
+                (should (ein:nbview--check-invariants))))
+            (let (saved)
+              (ein:notebook-save-notebook notebook (lambda (&rest _) (setq saved t)))
+              (should (ein:testing-wait-until (lambda () saved) 20))))
+        (ein:testing-kill-notebook notebook))
+      (ein:testing-nbformat-validate file)
+      (let* ((saved (json-parse-string
+                     (with-temp-buffer (insert-file-contents file) (buffer-string))
+                     :object-type 'alist :array-type 'list))
+             (cell (car (alist-get 'cells saved)))
+             (orig (car (alist-get 'cells original)))
+             (join (lambda (s) (if (stringp s) s (apply #'concat s)))))
+        (should (equal (funcall join (alist-get 'source orig))
+                       (funcall join (alist-get 'source cell))))
+        (should (equal (alist-get 'attachments orig) (alist-get 'attachments cell)))))))
+
 (provide 'test-ein-nbview-exec)
 ;;; test-ein-nbview-exec.el ends here

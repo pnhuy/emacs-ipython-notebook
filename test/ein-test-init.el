@@ -58,6 +58,14 @@
 (push (expand-file-name "test/nbview" ein:test-init--root) load-path)
 (setq load-prefer-newer t)
 
+;; Keep request.el's curl cookie jar out of the user's
+;; ~/.emacs.d/request: stale _xsrf cookies there (cookies ignore the
+;; port) make logins to fresh test servers fail with 403.
+(defconst ein:test-init--storage (make-temp-file "ein-test-request-" t))
+(setq request-storage-directory ein:test-init--storage)
+(add-hook 'kill-emacs-hook
+          (lambda () (ignore-errors (delete-directory ein:test-init--storage t))))
+
 (load (expand-file-name "test/testein.el" ein:test-init--root) nil t)
 
 (defun ein:test-init--files ()
@@ -75,7 +83,10 @@
          (and (file-directory-p d) (directory-files d t "\\`test-.*\\.el\\'")))))))
 
 (dolist (file (ein:test-init--files))
-  (load file nil t))
+  ;; A test file may already be loaded through `require' by a helper
+  ;; (ein-testing-live requires test-ein-smoke); ERT rejects a reload.
+  (unless (featurep (intern (file-name-base file)))
+    (load file nil t)))
 
 (ert-run-tests-batch-and-exit
  (let ((env (getenv "EIN_TEST_SELECTOR")))

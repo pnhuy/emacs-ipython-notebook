@@ -239,7 +239,7 @@ e.g., ob-c++ is not ob-C.el."
                                     (regexp-quote *ob-ein-sentinel*)
                                     (org-babel-result-end) t)))
                 until (not pending)
-                do (sleep-for (/ interval 1000.0))
+                do (ein:accept-output-for (/ interval 1000.0))
                 finally return
                 (if pending
                     (prog1 ""
@@ -369,7 +369,7 @@ Install CALLBACK (i.e., cell execution) upon notebook retrieval."
                             (cl-loop repeat 50
                                   for live-p = (ein:kernel-live-p (ein:$notebook-kernel nb))
                                   until live-p
-                                  do (sleep-for 0.3)
+                                  do (ein:accept-output-for 0.3)
                                   finally
                                   do (if (not live-p)
                                          (ein:log 'error
@@ -399,7 +399,7 @@ Install CALLBACK (i.e., cell execution) upon notebook retrieval."
                     with fullpath = (concat (file-name-as-directory nbpath) path)
                     for extant = (file-exists-p fullpath)
                     until (not extant)
-                    do (sleep-for 0.5)
+                    do (ein:accept-output-for 0.5)
                     finally do (if extant
                                    (ein:display-warning
                                     (format "cannot delete path=%s nbpath=%s"

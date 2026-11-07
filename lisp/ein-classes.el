@@ -222,7 +222,9 @@ defined by the server as just ein:$kernel in the client."
   msg-callbacks
   oinfo-cache
   after-start-hook
-  after-execute-hook)
+  after-execute-hook
+  status                                ; starting idle busy restarting disconnected dead
+  msg-progress)                         ; msg-id -> reply or idle, see `ein:kernel--msg-done'
 
 ;;; Cells
 
@@ -312,7 +314,7 @@ notebook that saved "*".  So don't add `:type'!")
        (status_dead.Kernel . "Kernel requires restart \\<ein:notebook-mode-map>\\[ein:notebook-restart-session-command-km]")
        (status_reconnecting.Kernel . "Kernel reconnecting...")
        (status_reconnected.Kernel . "Kernel reconnected")
-       (status_disconnected.Kernel . "Kernel requires reconnect \\<ein:notebook-mode-map>\\[ein:notebook-reconnect-session-command-km]")))
+       (status_disconnected.Kernel . "Kernel disconnected — \\<ein:notebook-mode-map>\\[ein:notebook-reconnect-session-command-km] to reconnect")))
     :type ein:notification-status))
   "Notification widget for Notebook.")
 

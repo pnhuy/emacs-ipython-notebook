@@ -64,13 +64,66 @@
 (defsubst ein:log-strip-timestamp (msg)
   (replace-regexp-in-string "^[0-9: ]+" "" msg))
 
+;;; Credential redaction (SC-012)
+
+(defvar ein:log--secrets nil
+  "Literal secret strings (tokens, passwords) that must never be logged.
+Add to it with `ein:log--register-secret'.")
+
+(defconst ein:log--redacted "<redacted>"
+  "Replacement text for redacted credentials.")
+
+(defconst ein:log--redact-patterns
+  '(;; token=..., password=..., _xsrf=... in URLs and form bodies.
+    ("\\(?:^\\|[^[:alnum:]_-]\\)\\(?:token\\|password\\|_xsrf\\)=\\([^&[:space:]\"';]+\\)" . 1)
+    ;; Authorization: token X / Bearer X / Basic X
+    ("[Aa]uthorization:?[[:space:]]+\\(?:[Tt]oken\\|[Bb]earer\\|[Bb]asic\\)?[[:space:]]*\\([^[:space:]\"',]+\\)" . 1)
+    ;; Cookie / Set-Cookie header values: every NAME=VALUE pair.
+    ("\\(?:[Ss]et-\\)?[Cc]ookie:?[[:space:]]+[^=[:space:]]+=\\(\"[^\"]*\"\\|[^;[:space:]]*\\)" . 1)
+    (";[[:space:]]*[^=;[:space:]]+=\\(\"[^\"]*\"\\|[^;[:space:]]*\\)" . 1))
+  "Alist of (REGEXP . SUBEXP); the SUBEXP match is replaced by a mask.
+The cookie continuation pattern only fires on text that also matched
+a cookie header, see `ein:log--redact'.")
+
+(defun ein:log--register-secret (secret)
+  "Remember SECRET so that `ein:log--redact' masks it everywhere."
+  (when (and (stringp secret) (>= (length secret) 4))
+    (cl-pushnew secret ein:log--secrets :test #'equal))
+  secret)
+
+(defun ein:log--redact-1 (string regexp subexp)
+  (replace-regexp-in-string regexp ein:log--redacted string t t subexp))
+
+(defun ein:log--redact (string)
+  "Return STRING with tokens, passwords, cookies and registered secrets masked."
+  (if (not (stringp string))
+      string
+    (let ((case-fold-search nil)
+          (out string))
+      (dolist (secret ein:log--secrets)
+        (setq out (string-replace secret ein:log--redacted out)))
+      (pcase-dolist (`(,re . ,sub) (butlast ein:log--redact-patterns))
+        (setq out (ein:log--redact-1 out re sub)))
+      ;; Remaining cookie pairs, only on lines that carry a cookie header.
+      (when (string-match-p "[Cc]ookie:" out)
+        (pcase-let ((`(,re . ,sub) (car (last ein:log--redact-patterns))))
+          (setq out
+                (mapconcat
+                 (lambda (line)
+                   (if (string-match-p "[Cc]ookie:" line)
+                       (ein:log--redact-1 line re sub)
+                     line))
+                 (split-string out "\n") "\n"))))
+      out)))
+
 (defun ein:log-wrapper (level func)
   (setq level (ein:log-level-name-to-int level))
   (when (<= level ein:log-level)
     (let* ((levname (ein:log-level-int-to-name level))
            (print-level ein:log-print-level)
            (print-length ein:log-print-length)
-           (msg (format "%s: [%s] %s" (format-time-string "%H:%M:%S:%3N") levname (funcall func)))
+           (msg (format "%s: [%s] %s" (format-time-string "%H:%M:%S:%3N") levname
+                        (ein:log--redact (funcall func))))
            (orig-buffer (current-buffer)))
       (if (and ein:log-max-string
                (> (length msg) ein:log-max-string))

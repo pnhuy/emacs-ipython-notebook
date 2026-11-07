@@ -13,7 +13,8 @@
   (let* ((notebook (ein:notebook-new ein:testing-notebook-dummy-url "" nil))
          (kernel (eintest:kernel-new 8888))
          (kernel-id "KERNEL-ID")
-         (desired-url "http://127.0.0.1:8888/api/sessions/KERNEL-ID")
+         ;; Restart is POST /api/kernels/<id>/restart (C17), not session recreate.
+         (desired-url "http://127.0.0.1:8888/api/kernels/KERNEL-ID/restart")
          (dummy-response (make-request-response))
          got-url)
     (setf (ein:$notebook-kernel notebook) kernel)
@@ -61,7 +62,134 @@
                (lambda (&rest _ignore) (make-ein:$websocket :ws nil :kernel kernel
                                                            :closed-by-client nil)))
               ((symbol-function 'ein:websocket-open-p) (lambda (&rest _ignore) t)))
+      ;; :new-p t: this Emacs started the kernel, so no confirmation (T049).
       (ein:kernel-retrieve-session--success
-       kernel nil :data (list :ws_url "ws://127.0.0.1:8888" :id kernel-id))
+       kernel nil :new-p t :data (list :ws_url "ws://127.0.0.1:8888" :id kernel-id))
       (ein:kernel-delete-session nil :kernel kernel))
     (should (equal got-url desired-url))))
+
+;;; US2 (T030, T031, T037, T038)
+
+(require 'ein-events)
+
+(defun eintest:kernel-live (&optional sent)
+  "Return a kernel that looks live; outgoing messages are pushed to SENT."
+  (let ((kernel (ein:kernel-new 8888 "" nil "/api/kernels" (ein:events-new))))
+    (setf (ein:$kernel-websocket kernel)
+          (make-ein:$websocket :ws nil :kernel kernel :closed-by-client nil))
+    (setf (ein:$kernel-kernel-id kernel) "KID")
+    (ignore sent)
+    kernel))
+
+(defmacro eintest:with-live-kernel (kernel-var sent-var &rest body)
+  (declare (indent 2))
+  `(let* ((,sent-var (list))
+          (,kernel-var (eintest:kernel-live)))
+     (cl-letf (((symbol-function 'ein:websocket-open-p) (lambda (&rest _) t))
+               ((symbol-function 'ein:websocket-send-shell-channel)
+                (lambda (_k msg) (push msg ,sent-var)))
+               ((symbol-function 'ein:websocket-close) #'ignore))
+       ,@body)))
+
+(defun eintest:frame (plist)
+  (make-websocket-frame :opcode 'text :payload (ein:json-encode plist)))
+
+(defun eintest:msg (channel msg-type parent-id content)
+  (list :channel channel
+        :header (list :msg_id (ein:utils-uuid) :msg_type msg-type)
+        :parent_header (if parent-id (list :msg_id parent-id) (make-hash-table))
+        :metadata (make-hash-table)
+        :content content))
+
+(defmacro eintest:capturing-logs (logs-var &rest body)
+  "Run BODY, collecting (LEVEL . MESSAGE) of `ein:log-wrapper' in LOGS-VAR."
+  (declare (indent 1))
+  `(let ((,logs-var '()))
+     (cl-letf (((symbol-function 'ein:log-wrapper)
+                (lambda (level func) (push (cons level (funcall func)) ,logs-var))))
+       ,@body)))
+
+(ert-deftest ein:kernel-execute-does-not-log-code ()
+  (eintest:with-live-kernel kernel _sent
+    (eintest:capturing-logs logs
+      (let ((ein:log-include-code nil))
+        (ein:kernel-execute kernel "print('very-secret-code')"))
+      (should-not (cl-some (lambda (l) (string-search "very-secret-code" (cdr l))) logs)))
+    (eintest:capturing-logs logs
+      (let ((ein:log-include-code t))
+        (ein:kernel-execute kernel "print('very-secret-code')"))
+      (should (cl-some (lambda (l) (string-search "very-secret-code" (cdr l))) logs)))))
+
+(ert-deftest ein:kernel-unexpected-close-sets-disconnected ()
+  (eintest:with-live-kernel kernel _sent
+    (let ((websocket (ein:$kernel-websocket kernel)))
+      (let ((ws (websocket-inner-create :url "ws://127.0.0.1:8888/x"
+                                        :conn nil :client-data websocket)))
+        (ein:kernel--on-ws-close ws)
+        (should (eq (ein:$kernel-status kernel) 'disconnected))))))
+
+(defun eintest:kernel-snapshot (kernel)
+  (let (keys)
+    (maphash (lambda (k v) (push (cons k (copy-tree v)) keys))
+             (ein:$kernel-msg-callbacks kernel))
+    (list (ein:$kernel-status kernel) (sort keys (lambda (a b) (string< (car a) (car b)))))))
+
+(ert-deftest ein:kernel-malformed-messages ()
+  (eintest:with-live-kernel kernel _sent
+    (let* ((outputs '())
+           (msg-id (ein:kernel-execute
+                    kernel "x"
+                    (list :output (cons (lambda (_arg &rest args) (push args outputs)) nil)
+                          :execute_reply (cons (lambda (_arg &rest args) (push args outputs)) nil))))
+           (inputs
+            (list
+             "{not json"
+             (ein:json-encode (list :channel "shell" :content (list :status "ok")))
+             (ein:json-encode (eintest:msg "iopub" "x_unknown_type" msg-id (list :a 1)))
+             (ein:json-encode (eintest:msg "shell" "execute_reply" "no-such-msg-id"
+                                           (list :status "ok" :execution_count 1)))
+             (ein:json-encode (eintest:msg "iopub" "stream" msg-id (list :name "stdout"))))))
+      (dolist (packet inputs)
+        (let ((before (eintest:kernel-snapshot kernel)))
+          (eintest:capturing-logs logs
+            (ein:kernel--handle-websocket-reply
+             kernel nil (make-websocket-frame :opcode 'text :payload packet))
+            (should (assq 'warn logs)))
+          (should (equal (eintest:kernel-snapshot kernel) before))
+          (should (null outputs)))))))
+
+(ert-deftest ein:kernel-out-of-order-routing ()
+  (eintest:with-live-kernel kernel sent
+    (let* ((a '()) (b '())
+           (cb (lambda (sym)
+                 (list :output (cons (lambda (_ _type content _md)
+                                       (set sym (cons (or (plist-get content :text)
+                                                          (plist-get (plist-get content :data)
+                                                                     :text/plain))
+                                                      (symbol-value sym))))
+                                     nil)
+                       :execute_reply (cons (lambda (_ content _md)
+                                              (set sym (cons (list 'reply (plist-get content :status))
+                                                             (symbol-value sym))))
+                                            nil))))
+           (_ (progn (defvar eintest--a) (defvar eintest--b)
+                     (setq eintest--a nil eintest--b nil)))
+           (id-a (ein:kernel-execute kernel "a" (funcall cb 'eintest--a)))
+           (id-b (ein:kernel-execute kernel "b" (funcall cb 'eintest--b))))
+      (should (= (length sent) 2))
+      (dolist (m (list (eintest:msg "iopub" "status" id-b '(:execution_state "busy"))
+                       (eintest:msg "iopub" "status" id-a '(:execution_state "busy"))
+                       (eintest:msg "iopub" "stream" id-b '(:name "stdout" :text "b1"))
+                       (eintest:msg "iopub" "execute_result" id-a
+                                    '(:execution_count 1 :data (:text/plain "a1") :metadata nil))
+                       (eintest:msg "shell" "execute_reply" id-b '(:status "ok" :execution_count 2))
+                       (eintest:msg "iopub" "stream" id-a '(:name "stdout" :text "a2"))
+                       (eintest:msg "shell" "execute_reply" id-a '(:status "ok" :execution_count 1))
+                       (eintest:msg "iopub" "status" id-b '(:execution_state "idle"))
+                       (eintest:msg "iopub" "status" id-a '(:execution_state "idle"))))
+        (ein:kernel--handle-websocket-reply kernel nil (eintest:frame m)))
+      (setq a eintest--a b eintest--b)
+      (should (equal (reverse a) '("a1" "a2" (reply "ok"))))
+      (should (equal (reverse b) '("b1" (reply "ok"))))
+      (should-not (ein:kernel-get-callbacks-for-msg kernel id-a))
+      (should-not (ein:kernel-get-callbacks-for-msg kernel id-b)))))

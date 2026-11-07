@@ -43,6 +43,12 @@
                          (integer :tag "Local port" 8888)))
   :group 'ein)
 
+(defcustom ein:log-include-code nil
+  "When non-nil, debug logs include the source code sent for execution.
+Off by default: cell source may contain credentials or private data."
+  :type 'boolean
+  :group 'ein)
+
 (make-obsolete-variable 'ein:default-url-or-port nil "0.17.0")
 
 (defconst ein:source-dir (file-name-directory load-file-name)

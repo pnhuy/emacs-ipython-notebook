@@ -194,3 +194,20 @@ def f():
                         args))))
     (funcall test nil 1)
     (funcall test 'whatever 1)))
+
+(ert-deftest ein:accept-output-for--waits-full-time-without-sleep ()
+  "T053: waits use `accept-process-output' and keep their full duration."
+  (let ((calls 0)
+        (start (float-time)))
+    (cl-letf (((symbol-function 'sleep-for)
+               (lambda (&rest _) (error "sleep-for used")))
+              ((symbol-function 'accept-process-output)
+               (let ((orig (symbol-function 'accept-process-output)))
+                 (lambda (&rest args)
+                   (cl-incf calls)
+                   ;; Simulate early return because output arrived.
+                   (funcall orig nil 0.01)
+                   (ignore args)))))
+      (ein:accept-output-for 0.1))
+    (should (> calls 1))
+    (should (>= (- (float-time) start) 0.1))))

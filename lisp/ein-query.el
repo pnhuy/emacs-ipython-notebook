@@ -44,6 +44,17 @@ The proper fix is to sempahore between competing curl processes.")
 (defvar ein:query-authorization-tokens (make-hash-table :test 'equal)
   "Jupyterhub authorization token by (host . username).")
 
+(defvar ein:force-sync)
+
+(defun ein:query--retry-later (delay fn &rest args)
+  "Call FN with ARGS after DELAY seconds without blocking Emacs.
+Retries scheduled from request callbacks used to `sleep-for', which
+froze editing and timers.  Under `ein:force-sync' callers expect the
+retry to finish before returning, so wait and call FN directly."
+  (if (bound-and-true-p ein:force-sync)
+      (progn (sleep-for delay) (apply fn args))
+    (apply #'run-at-time delay nil fn args)))
+
 (defun ein:query-get-cookies (host path-prefix)
   "Return (:path :expire :name :value) for HOST, matching PATH-PREFIX."
   (when-let* ((filename (request--curl-cookie-jar)))
@@ -73,7 +84,14 @@ The proper fix is to sempahore between competing curl processes.")
                          (setq url* (file-name-directory (directory-file-name url*))
                                parsed-url* (url-generic-parse-url url*)))
                        paths*))))
-         (paths (progn (cl-pushnew "/" paths* :test #'equal) (reverse paths*)))
+         (paths (progn (cl-pushnew "/" paths* :test #'equal)
+                       ;; Cookie paths match exactly in request.el, and
+                       ;; a server under base_url sets "/base", not "/base/".
+                       (cl-mapcan (lambda (p)
+                                    (if (equal p "/")
+                                        (list p)
+                                      (list p (directory-file-name p))))
+                                  (reverse paths*))))
          (cookies (cl-some (lambda (path)
                              (request-cookie-alist host path securep))
                            paths))

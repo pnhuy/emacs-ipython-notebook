@@ -123,18 +123,22 @@ Supply ERROR-BUFFER to capture stderr."
   (cl-loop for line in (condition-case err
                            (apply #'process-lines
                                   ein:jupyter-server-command
-                                  (append (split-string (or ein:jupyter-server-use-subcommand ""))
+                                  (append (ein:jupyter--subcommand-args)
                                           '("list" "--json")))
                          ;; often there is no local jupyter installation
                          (error (ein:log 'info "ein:process-refresh-processes: %s" err) nil))
            do (cl-destructuring-bind
-                  (&key pid url notebook_dir &allow-other-keys)
+                  (&key pid url root_dir notebook_dir &allow-other-keys)
                   (ein:json-read-from-string line)
-                (puthash (directory-file-name notebook_dir)
-                         (make-ein:$process :pid pid
-                                            :url (ein:url url)
-                                            :dir (directory-file-name notebook_dir))
-                         ein:%processes%))))
+                ;; jupyter_server 2.x reports root_dir; notebook < 7 notebook_dir.
+                (if-let* ((dir (or root_dir notebook_dir)))
+                    (puthash (directory-file-name dir)
+                             (make-ein:$process :pid pid
+                                                :url (ein:url url)
+                                                :dir (directory-file-name dir))
+                             ein:%processes%)
+                  (ein:log 'warn "ein:process-refresh-processes: server pid %s has no root_dir"
+                           pid)))))
 
 (defun ein:process-dir-match (filename)
   "Return ein:process whose directory is prefix of FILENAME."

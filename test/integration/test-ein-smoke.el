@@ -58,7 +58,9 @@ Return PRED's final value."
                (lambda (&rest _) (error "Unexpected password prompt"))))
       (ein:notebooklist-login url (lambda (&rest _) (setq logged t)) nil nil token))
     (should (ein:testing-wait-until (lambda () logged) 20))
-    (ein:notebook-open url path nil (lambda (nb &rest _) (setq notebook nb)) nil t)
+    ;; Login keys the server by its canonical `ein:url' form.
+    (ein:notebook-open (ein:url url) path nil
+                       (lambda (nb &rest _) (setq notebook nb)) nil t)
     (should (ein:testing-wait-until (lambda () notebook) 30))
     notebook))
 

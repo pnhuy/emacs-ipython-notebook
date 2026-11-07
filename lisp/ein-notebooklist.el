@@ -135,7 +135,12 @@ Return empty string token if all authentication disabled.
 Return nil if unclear what, if any, authentication applies."
   (cl-multiple-value-bind (password-p token) (ein:jupyter-crib-token url-or-port)
     (cond ((eq password-p t) (read-passwd (format "Password for %s: " url-or-port)))
-          ((and (stringp token) (eq password-p :json-false)) token)
+          ;; jupyter_server 2.x reports "password": false and an empty
+          ;; token even when PasswordIdentityProvider holds a password,
+          ;; so an empty token is "unknown": probe /login instead.
+          ((and (stringp token) (not (string-empty-p token))
+                (eq password-p :json-false))
+           token)
           (t nil))))
 
 (defun ein:notebooklist-ask-url-or-port ()
@@ -343,8 +348,8 @@ See `ein:format-time-string'."
     (if retry
         (ein:log 'error notice)
       (ein:log 'info notice)
-      (sleep-for 1.5)
-      (ein:notebooklist-new-notebook url-or-port kernelspec callback no-pop t explicit-path))))
+      (ein:query--retry-later 1.5 #'ein:notebooklist-new-notebook
+                              url-or-port kernelspec callback no-pop t explicit-path))))
 
 ;;;###autoload
 (defun ein:notebooklist-new-notebook-with-name
@@ -660,6 +665,8 @@ or even this (if you want fast Emacs start-up):
 ;;; Login
 
 (defun ein:notebooklist-login--iteration (url-or-port callback errback token iteration response-status)
+  (when (stringp token)
+    (ein:log--register-secret token))
   (ein:log 'debug "Login attempt #%d in response to %s from %s."
            iteration response-status url-or-port)
   (setq callback (or callback #'ignore))
@@ -710,6 +717,11 @@ ein:notebooklist-open*."
                  ,(when current-prefix-arg
                     (read-no-blanks-input "Cookie content: "))
 		 nil))
+  ;; One canonical key per server: "http://h:8888/" and "http://h:8888"
+  ;; must share kernelspecs and the notebooklist.  URLs with a query
+  ;; (JupyterHub ?token=) are left for `ein:notebooklist-open*'.
+  (unless (string-search "?" (format "%s" url-or-port))
+    (setq url-or-port (ein:url url-or-port)))
   (when cookie-name
     (let* ((parsed-url (url-generic-parse-url (file-name-as-directory url-or-port)))
            (domain (url-host parsed-url))
@@ -732,14 +744,14 @@ ein:notebooklist-open*."
       (list :reprompt t))))
 
 (defun ein:notebooklist-login--success-1 (url-or-port callback errback &optional hub-p)
-  (ein:log 'info "Login to %s complete." url-or-port)
+  (ein:log 'info "Login to %s complete." (ein:log--redact (format "%s" url-or-port)))
   (ein:notebooklist-open* url-or-port nil nil callback errback hub-p))
 
 (defun ein:notebooklist-login--error-1 (url-or-port error-thrown response errback)
-  (ein:log 'error "Login to %s failed, error-thrown %s, raw-header %s"
+  (ein:log 'error "Login to %s failed, error-thrown %s, status %s"
            url-or-port
            (subst-char-in-string ?\n ?\  (format "%s" error-thrown))
-           (request-response--raw-header response))
+           (request-response-status-code response))
   (funcall errback))
 
 (cl-defun ein:notebooklist-login--complete

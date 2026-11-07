@@ -553,6 +553,15 @@ NOTE: This function creates new list."
   "Set `truncate-lines' on (set it to `t')."
   (setq truncate-lines t))
 
+(defun ein:accept-output-for (seconds)
+  "Service process output and timers for SECONDS, then return.
+Replaces `sleep-for' in EIN wait loops: the full duration is kept even
+though `accept-process-output' returns early whenever output arrives,
+and \\[keyboard-quit] still interrupts."
+  (let ((end (+ (float-time) seconds)))
+    (while (< (float-time) end)
+      (accept-process-output nil (max 0.001 (- end (float-time)))))))
+
 (defun ein:wait-until (predicate &optional predargs timeout-seconds)
   "Wait until PREDICATE function returns non-`nil'.
 PREDARGS is argument list for the PREDICATE function.

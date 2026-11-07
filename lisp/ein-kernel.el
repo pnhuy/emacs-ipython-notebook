@@ -68,7 +68,28 @@
    :base-url base-url
    :oinfo-cache (make-hash-table :test #'equal)
    :username "username"
-   :msg-callbacks (make-hash-table :test 'equal)))
+   :msg-callbacks (make-hash-table :test 'equal)
+   :msg-progress (make-hash-table :test 'equal)))
+
+(defun ein:kernel--set-status (kernel status)
+  "Record STATUS (a symbol, see data-model.md) on KERNEL."
+  (setf (ein:$kernel-status kernel) status))
+
+(defun ein:kernel--note-execution-state (kernel status)
+  "Record busy/idle STATUS from iopub unless KERNEL is restarting.
+While a REST restart is in flight the old websocket still reports
+the kernel's busy/idle cycle; only the reconnect may end `restarting'."
+  (unless (eq (ein:$kernel-status kernel) 'restarting)
+    (ein:kernel--set-status kernel status)))
+
+;;; Ownership (FR-010): kernels whose session this Emacs created.
+
+(defvar ein:kernel--owned (make-hash-table :test #'equal)
+  "Kernel ids started by this Emacs through a session POST.")
+
+(defun ein:kernel-owned-p (kernel-id)
+  "Non-nil if KERNEL-ID was started by this Emacs."
+  (and kernel-id (gethash kernel-id ein:kernel--owned)))
 
 (defun ein:kernel-del (kernel)
   "Destructor for `ein:$kernel'."
@@ -126,8 +147,10 @@
              session-id session-p)
     (when callback (funcall callback kernel session-p))))
 
-(cl-defun ein:kernel-restart-session (kernel)
-  "Server side delete of KERNEL session and subsequent restart with all new state"
+(defun ein:kernel--restart-by-recreate (kernel)
+  "Legacy restart: delete KERNEL's session and create a new one.
+The kernel id changes.  Used only when the server lacks the REST
+restart endpoint."
   (ein:kernel-delete-session
    (lambda (kernel)
      (ein:events-trigger (ein:$kernel-events kernel) 'status_restarting.Kernel)
@@ -135,7 +158,39 @@
                                   (lambda (kernel)
                                     (ein:events-trigger (ein:$kernel-events kernel)
                                                         'status_restarted.Kernel))))
-   :kernel kernel))
+   :kernel kernel :no-confirm t))
+
+(cl-defun ein:kernel-restart-session (kernel)
+  "Restart KERNEL with `POST /api/kernels/<id>/restart', keeping its id.
+Falls back to session delete+recreate when the server answers 404 or 405."
+  (let ((kernel-id (ein:$kernel-kernel-id kernel)))
+    (if (not kernel-id)
+        (ein:kernel--restart-by-recreate kernel)
+      (ein:kernel--set-status kernel 'restarting)
+      (ein:events-trigger (ein:$kernel-events kernel) 'status_restarting.Kernel)
+      (ein:query-singleton-ajax
+       (ein:url (ein:$kernel-url-or-port kernel) "api/kernels" kernel-id "restart")
+       :type "POST"
+       :parser #'ein:json-read
+       :success (lambda (&rest _)
+                  (ein:log 'verbose "ein:kernel-restart-session: restarted %s" kernel-id)
+                  (ein:kernel--close-websocket kernel)
+                  (ein:kernel-start-websocket
+                   kernel
+                   (lambda (kernel)
+                     (ein:kernel--set-status kernel 'idle)
+                     (ein:events-trigger (ein:$kernel-events kernel)
+                                         'status_restarted.Kernel))))
+       :error (cl-function
+               (lambda (&key response error-thrown &allow-other-keys)
+                 (let ((code (request-response-status-code response)))
+                   (if (memq code '(404 405))
+                       (progn
+                         (ein:log 'info "REST restart unavailable (%s); recreating the session" code)
+                         (ein:kernel--restart-by-recreate kernel))
+                     (ein:kernel--set-status kernel 'dead)
+                     (ein:log 'error "ein:kernel-restart-session: %s %s"
+                              (or code "") (car error-thrown))))))))))
 
 (cl-defun ein:kernel-retrieve-session (kernel &optional iteration callback)
   "Formerly ein:kernel-start, but that was a misnomer.
@@ -158,6 +213,7 @@ CALLBACK of arity 1, the kernel."
     (let ((kernel-id (ein:$kernel-kernel-id kernel))
           (kernelspec (ein:$kernel-kernelspec kernel))
           (path (ein:$kernel-path kernel)))
+      (ein:kernel--set-status kernel 'starting)
       (ein:query-singleton-ajax
        (ein:url (ein:$kernel-url-or-port kernel) "api/sessions")
        :type "POST"
@@ -171,7 +227,8 @@ CALLBACK of arity 1, the kernel."
                                        `((id . ,kernel-id)))))))))
        :parser #'ein:json-read
        :complete (apply-partially #'ein:kernel-retrieve-session--complete kernel callback)
-       :success (apply-partially #'ein:kernel-retrieve-session--success kernel callback)
+       :success (apply-partially #'ein:kernel-retrieve-session--success
+                                 kernel callback :new-p (not kernel-id))
        :error (apply-partially #'ein:kernel-retrieve-session--error kernel iteration callback)))))
 
 (cl-defun ein:kernel-retrieve-session--complete
@@ -188,11 +245,14 @@ CALLBACK of arity 1, the kernel."
          (tries-left (1- (- max-tries iteration))))
     (ein:log 'verbose "ein:kernel-retrieve-session--error [%s], %s tries left"
              (car error-thrown) tries-left)
-    (sleep-for (* (1+ iteration) 0.5))
     (if (> tries-left 0)
-        (ein:kernel-retrieve-session kernel (1+ iteration) callback))))
+        (ein:query--retry-later (* (1+ iteration) 0.5)
+                                #'ein:kernel-retrieve-session
+                                kernel (1+ iteration) callback))))
 
-(cl-defun ein:kernel-retrieve-session--success (kernel callback &key data &allow-other-keys)
+(cl-defun ein:kernel-retrieve-session--success (kernel callback
+                                               &key new-p data &allow-other-keys)
+  "NEW-P is non-nil when the session POST did not name an existing kernel."
   (let ((session-id (plist-get data :id)))
     (if (plist-get data :kernel)
         (setq data (plist-get data :kernel)))
@@ -200,6 +260,8 @@ CALLBACK of arity 1, the kernel."
       (ein:log 'verbose "ein:kernel-retrieve-session--success: kernel-id=%s session-id=%s"
                id session-id)
       (setf (ein:$kernel-kernel-id kernel) id)
+      (when (and new-p id)
+        (puthash id t ein:kernel--owned))
       (setf (ein:$kernel-session-id kernel) session-id)
       (setf (ein:$kernel-ws-url kernel) (ein:kernel--ws-url (ein:$kernel-url-or-port kernel)))
       (setf (ein:$kernel-kernel-url kernel)
@@ -235,22 +297,110 @@ we're reconnected)."
 See https://github.com/ipython/ipython/pull/3307"
   (let* ((parsed-url (url-generic-parse-url url-or-port))
          (protocol (if (string= (url-type parsed-url) "https") "wss" "ws")))
+    ;; Drop the trailing slash of the base path: the kernel url that is
+    ;; appended starts with "/" (C20: "ws://host//api/kernels" got 404).
     (format "%s://%s:%s%s"
             protocol
             (url-host parsed-url)
             (url-port parsed-url)
-            (url-filename parsed-url))))
+            (string-trim-right (url-filename parsed-url) "/+"))))
+
+(defconst ein:kernel--known-msg-types
+  '(("iopub" "stream" "display_data" "update_display_data" "pyout" "pyerr"
+     "error" "execute_result" "status" "data_pub" "clear_output"
+     "execute_input" "pyin" "comm_open" "comm_msg" "comm_close"
+     "debug_event" "shutdown_reply")
+    ("shell" "execute_reply" "inspect_reply" "object_info_reply"
+     "complete_reply" "history_reply" "is_complete_reply" "kernel_info_reply"
+     "connect_reply" "comm_info_reply" "shutdown_reply" "interrupt_reply"
+     "debug_reply")
+    ("stdin" "input_request"))
+  "Message types each channel may carry (Jupyter messaging protocol 5.x).")
+
+(defun ein:kernel--short-id (msg-id)
+  (if (stringp msg-id) (substring msg-id 0 (min 8 (length msg-id))) msg-id))
+
+(defun ein:kernel--pending-p (kernel msg-id)
+  "Non-nil if MSG-ID is a request of KERNEL still awaiting replies."
+  (and msg-id
+       (not (eq (gethash msg-id (ein:$kernel-msg-callbacks kernel) 'ein--none)
+                'ein--none))))
+
+(defun ein:kernel--msg-done (kernel msg-id what)
+  "Record that WHAT (`reply' or `idle') arrived for MSG-ID.
+Once both have arrived, the pending request is forgotten."
+  (when (ein:kernel--pending-p kernel msg-id)
+    (let* ((progress (ein:$kernel-msg-progress kernel))
+           (seen (gethash msg-id progress)))
+      (if (and seen (not (eq seen what)))
+          (progn (remhash msg-id progress)
+                 (remhash msg-id (ein:$kernel-msg-callbacks kernel)))
+        (puthash msg-id what progress)))))
+
+(defun ein:kernel--validate-message (kernel msg)
+  "Return nil if MSG may be dispatched, else a reason string."
+  (let* ((channel (plist-get msg :channel))
+         (header (plist-get msg :header))
+         (msg-type (and (listp header) (plist-get header :msg_type)))
+         (parent-id (plist-get (plist-get msg :parent_header) :msg_id))
+         (content (plist-get msg :content)))
+    (cond ((not (stringp channel)) "no channel")
+          ((not (assoc channel ein:kernel--known-msg-types))
+           (format "unknown channel %s" channel))
+          ((not (stringp msg-type)) "no header.msg_type")
+          ((not (plist-member msg :parent_header)) "no parent_header")
+          ((not (member msg-type (cdr (assoc channel ein:kernel--known-msg-types))))
+           (format "unknown msg_type %s" msg-type))
+          ((and (equal channel "shell")
+                (not (ein:kernel--pending-p kernel parent-id)))
+           (format "%s for unknown msg_id %s" msg-type (ein:kernel--short-id parent-id)))
+          ((and (equal msg-type "stream") (not (stringp (plist-get content :text))))
+           (format "stream without text for msg_id %s" (ein:kernel--short-id parent-id))))))
 
 (defun ein:kernel--handle-websocket-reply (kernel _ws frame)
-  (-when-let* ((packet (websocket-frame-payload frame))
-               (channel (plist-get (ein:json-read-from-string packet) :channel)))
-    (cond ((string-equal channel "iopub")
-           (ein:kernel--handle-iopub-reply kernel packet))
-          ((string-equal channel "shell")
-           (ein:kernel--handle-shell-reply kernel packet))
-          ((string-equal channel "stdin")
-           (ein:kernel--handle-stdin-reply kernel packet))
-          (t (ein:log 'warn "Received reply from unforeseen channel %s" channel)))))
+  "Dispatch the websocket FRAME to KERNEL's channel handlers.
+Malformed or unexpected messages are logged at `warn' and dropped;
+no error escapes into the websocket library (constitution VI)."
+  (let ((packet (websocket-frame-payload frame))
+        msg)
+    (condition-case err
+        (setq msg (ein:json-read-from-string packet))
+      (error
+       (ein:log 'warn "Dropped malformed kernel message (%s)" (car err))))
+    (cond
+     ((null msg))
+     ((not (and (listp msg) (keywordp (car-safe msg))))
+      (ein:log 'warn "Dropped kernel message that is not an object"))
+     (t
+      (let ((reason (ein:kernel--validate-message kernel msg)))
+        (if reason
+            (ein:log 'warn "Dropped kernel message: %s" reason)
+          (condition-case err
+              (let ((channel (plist-get msg :channel)))
+                (cond ((string-equal channel "iopub")
+                       (ein:kernel--handle-iopub-reply kernel packet))
+                      ((string-equal channel "shell")
+                       (ein:kernel--handle-shell-reply kernel packet))
+                      ((string-equal channel "stdin")
+                       (ein:kernel--handle-stdin-reply kernel packet))))
+            (error
+             (ein:log 'error "Error handling %s message: %s"
+                      (plist-get (plist-get msg :header) :msg_type)
+                      (error-message-string err))))))))))
+
+(defun ein:kernel--on-ws-close (ws)
+  "Websocket WS closed.  If the client did not ask for it, disconnect.
+Sets the kernel status to `disconnected' and emits
+`status_disconnected.Kernel'; never reconnects by itself (FR-009)."
+  (condition-case err
+      (-if-let* ((websocket (websocket-client-data ws))
+                 (kernel (ein:$websocket-kernel websocket)))
+          (unless (ein:$websocket-closed-by-client websocket)
+            (ein:log 'verbose "WS closed unexpectedly: %s" (websocket-url ws))
+            (ein:kernel-disconnect kernel))
+        (ein:log 'error "ein:start-single-websocket: on-close no client data for %s."
+                 (websocket-url ws)))
+    (error (ein:log 'error "ein:kernel--on-ws-close: %s" (error-message-string err)))))
 
 (defun ein:start-single-websocket (kernel open-callback)
   "OPEN-CALLBACK (kernel) (e.g., execute cell)"
@@ -262,18 +412,15 @@ See https://github.com/ipython/ipython/pull/3307"
     (setf (ein:$kernel-websocket kernel)
           (ein:websocket ws-url kernel
                          (apply-partially #'ein:kernel--handle-websocket-reply kernel)
-                         (lambda (ws)
-                           (-if-let* ((websocket (websocket-client-data ws))
-                                      (kernel (ein:$websocket-kernel websocket)))
-                               (unless (ein:$websocket-closed-by-client websocket)
-                                 (ein:log 'verbose "WS closed unexpectedly: %s" (websocket-url ws))
-                                 (ein:kernel-disconnect kernel))
-                             (ein:log 'error "ein:start-single-websocket: on-close no client data for %s." (websocket-url ws))))
+                         #'ein:kernel--on-ws-close
                          (apply-partially
                           (lambda (cb ws)
                             (-if-let* ((websocket (websocket-client-data ws))
                                        (kernel (ein:$websocket-kernel websocket)))
                                 (progn
+                                  (when (memq (ein:$kernel-status kernel)
+                                              '(nil starting disconnected))
+                                    (ein:kernel--set-status kernel 'idle))
                                   (awhen (and (ein:kernel-live-p kernel) cb)
                                     (funcall it kernel))
                                   (ein:log 'verbose "WS opened: %s" (websocket-url ws)))
@@ -288,13 +435,19 @@ See https://github.com/ipython/ipython/pull/3307"
 (defun ein:kernel-on-connect (_kernel _content _metadata)
   (ein:log 'info "Kernel connect_request_reply received."))
 
+(defun ein:kernel--close-websocket (kernel)
+  "Close KERNEL's websocket, if any, without emitting events."
+  (aif (ein:$kernel-websocket kernel)
+      (progn (when (ein:$websocket-ws it)
+               (ein:websocket-close it))
+             (setf (ein:$kernel-websocket kernel) nil))))
+
 (defun ein:kernel-disconnect (kernel)
   "Close websocket connection to running kernel, but do not
 delete the kernel on the server side"
+  (ein:kernel--set-status kernel 'disconnected)
   (ein:events-trigger (ein:$kernel-events kernel) 'status_disconnected.Kernel)
-  (aif (ein:$kernel-websocket kernel)
-      (progn (ein:websocket-close it)
-             (setf (ein:$kernel-websocket kernel) nil))))
+  (ein:kernel--close-websocket kernel))
 
 (defun ein:kernel-live-p (kernel)
   (and (ein:$kernel-p kernel)
@@ -377,7 +530,9 @@ expectation of a kernel response."
                    :stop_on_error (or stop-on-error json-false)))
          (msg (ein:kernel--get-msg kernel "execute_request" content))
          (msg-id (plist-get (plist-get msg :header) :msg_id)))
-    (ein:log 'debug "ein:kernel-execute: code=%s msg_id=%s" code msg-id)
+    (if ein:log-include-code
+        (ein:log 'debug "ein:kernel-execute: code=%s msg_id=%s" code msg-id)
+      (ein:log 'debug "ein:kernel-execute: msg_id=%s" msg-id))
     (ein:websocket-send-shell-channel kernel msg)
     (ein:kernel-set-callbacks-for-msg kernel msg-id callbacks)
     (unless silent
@@ -427,27 +582,63 @@ Example::
 
 (defvar ein:force-sync)
 (declare-function ein:content-query-sessions "ein-contents-api")
+(defun ein:kernel--sessions-using (url-or-port kernel-id)
+  "Number of sessions on URL-OR-PORT that use KERNEL-ID (synchronous)."
+  (let ((sharing 0))
+    (ein:query-singleton-ajax
+     (ein:url url-or-port "api/sessions")
+     :type "GET"
+     :parser #'ein:json-read
+     :sync t
+     :success (cl-function
+               (lambda (&key data &allow-other-keys)
+                 (setq sharing
+                       (cl-count kernel-id (append data nil)
+                                 :key (lambda (s) (plist-get (plist-get s :kernel) :id))
+                                 :test #'equal)))))
+    sharing))
+
+(defun ein:kernel--shutdown-confirmed-p (url-or-port kernel-id)
+  "Return non-nil if the kernel KERNEL-ID may be shut down.
+Ask first when this Emacs did not start it, or when more than one
+session on URL-OR-PORT uses it (FR-010)."
+  (cond ((not (ein:kernel-owned-p kernel-id))
+         (y-or-n-p "Kernel not started by this Emacs; shut it down anyway? "))
+        ((> (ein:kernel--sessions-using url-or-port kernel-id) 1)
+         (y-or-n-p "Kernel is shared with other sessions; shut it down anyway? "))
+        (t t)))
+
 (cl-defun ein:kernel-delete-session (&optional callback
-                                     &key url-or-port path kernel
-                                     &aux (session-id))
+                                     &key url-or-port path kernel no-confirm
+                                     &aux (session-id) (kernel-id))
   "Regardless of success or error, we clear all state variables of
-kernel and funcall CALLBACK (kernel)"
+kernel and funcall CALLBACK (kernel).
+Unless NO-CONFIRM, ask before shutting down a kernel this Emacs did
+not start or that other sessions share; on refusal only disconnect."
   (cond (kernel
          (setq url-or-port (ein:$kernel-url-or-port kernel))
          (setq path (ein:$kernel-path kernel))
-         (setq session-id (ein:$kernel-session-id kernel)))
+         (setq session-id (ein:$kernel-session-id kernel))
+         (setq kernel-id (ein:$kernel-kernel-id kernel)))
         ((and url-or-port path)
          (aif (ein:notebook-get-opened-notebook url-or-port path)
              (progn
                (setq kernel (ein:$notebook-kernel it))
-               (setq session-id (ein:$kernel-session-id kernel)))
+               (setq session-id (ein:$kernel-session-id kernel))
+               (setq kernel-id (ein:$kernel-kernel-id kernel)))
            (let ((ein:force-sync t))
              (ein:content-query-sessions
               url-or-port
               (lambda (session-hash)
-                (setq session-id (car (gethash path session-hash))))
+                (let ((entry (gethash path session-hash)))
+                  (setq session-id (car entry))
+                  (setq kernel-id (plist-get (cdr entry) :id))))
               nil))))
         (t (error "ein:kernel-delete-session: need kernel, or url-or-port and path")))
+  (when (and session-id (not no-confirm)
+             (not (ein:kernel--shutdown-confirmed-p url-or-port kernel-id)))
+    (ein:log 'info "Kept kernel %s running; disconnected only" (or kernel-id ""))
+    (setq session-id nil))
   (if session-id
       (ein:query-singleton-ajax
        (ein:url url-or-port "api/sessions" session-id)
@@ -458,7 +649,9 @@ kernel and funcall CALLBACK (kernel)"
                                  (aif (ein:notebooklist-get-buffer url-or-port)
                                      (buffer-local-value 'ein:%notebooklist% it))
                                  nil))
-    (ein:log 'verbose "ein:kernel-delete-session: no sessions found for %s" path)
+    (ein:log 'verbose "ein:kernel-delete-session: no session deleted for %s" path)
+    (when kernel
+      (ein:kernel-disconnect kernel))
     (when callback
       (funcall callback kernel))))
 
@@ -563,7 +756,8 @@ kernel and funcall CALLBACK (kernel)"
         (ein:case-equal msg-type
           (("execute_reply")
            (aif (plist-get content :execution_count)
-               (ein:events-trigger events 'execution_count.Kernel it))))))))
+               (ein:events-trigger events 'execution_count.Kernel it)))))
+      (ein:kernel--msg-done kernel msg-id 'reply))))
 
 (defun ein:kernel--handle-iopub-reply (kernel packet)
   (cl-destructuring-bind
@@ -589,13 +783,26 @@ kernel and funcall CALLBACK (kernel)"
         (("status")
          (ein:case-equal (plist-get content :execution_state)
            (("busy")
+            (ein:kernel--note-execution-state kernel 'busy)
             (ein:events-trigger events 'status_busy.Kernel))
            (("idle")
+            (ein:kernel--note-execution-state kernel 'idle)
             (ein:events-trigger events 'status_idle.Kernel)
             (awhen (ein:ipdb-get-session kernel)
-              (ein:ipdb-stop-session it)))
+              (ein:ipdb-stop-session it))
+            (ein:kernel--msg-done kernel parent-id 'idle))
+           (("restarting" "autorestarting")
+            ;; Jupyter Server's auto-restarter: the kernel process died
+            ;; and a fresh one is starting.  Output of running cells is
+            ;; lost; a later idle marks the new kernel usable.
+            (unless (eq (ein:$kernel-status kernel) 'restarting)
+              (ein:log 'warn "Kernel %s died; the server is restarting it"
+                       (ein:$kernel-kernel-id kernel))
+              (ein:kernel--set-status kernel 'dead)
+              (ein:events-trigger events 'status_dead.Kernel)))
            (("dead")
             (ein:kernel-disconnect kernel)
+            (ein:kernel--set-status kernel 'dead)
             (awhen (ein:ipdb-get-session kernel)
               (ein:ipdb-stop-session it)))))
         (("data_pub")

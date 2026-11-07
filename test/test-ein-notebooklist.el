@@ -25,3 +25,22 @@
 (eintest:notebooklist-is-empty-context-of ein:get-kernel)
 (eintest:notebooklist-is-empty-context-of ein:get-cell-at-point)
 (eintest:notebooklist-is-empty-context-of ein:get-traceback-data)
+
+(ert-deftest ein:notebooklist-token-or-password--empty-token-is-unknown ()
+  "jupyter_server 2.x lists password servers as password false, token \"\"."
+  (cl-letf (((symbol-function 'ein:jupyter-crib-token)
+             (lambda (_) (list :json-false ""))))
+    (should-not (ein:notebooklist-token-or-password "http://127.0.0.1:8888")))
+  (cl-letf (((symbol-function 'ein:jupyter-crib-token)
+             (lambda (_) (list :json-false "abc"))))
+    (should (equal (ein:notebooklist-token-or-password "http://127.0.0.1:8888")
+                   "abc"))))
+
+(ert-deftest ein:notebooklist-login--canonical-key ()
+  "A trailing slash does not create a second server key."
+  (let (seen)
+    (cl-letf (((symbol-function 'ein:notebooklist-token-or-password) (lambda (_) ""))
+              ((symbol-function 'ein:notebooklist-open*)
+               (lambda (url &rest _) (setq seen url))))
+      (ein:notebooklist-login "http://127.0.0.1:8888/" #'ignore)
+      (should (equal seen "http://127.0.0.1:8888")))))

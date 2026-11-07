@@ -50,18 +50,22 @@ earlier calls to `request' (request.el)."
          (read-cookies-func (lambda (path)
                               (request-cookie-alist
                                (url-host parsed-url) path securep)))
+         ;; request.el matches cookie paths exactly, and a server under
+         ;; base_url "/x/" sets its _xsrf cookie on "/x".
+         (paths (delete-dups
+                 (cl-mapcan (lambda (p)
+                              (if (equal p "/") (list p)
+                                (list p (directory-file-name p))))
+                            `("/" "/hub/" ,base-url
+                              ,@(ein:maybe-get-jhconn-user url)))))
          (cookies (cl-loop
                    repeat 4
-                   for cand = (cl-mapcan read-cookies-func
-                                         `("/"
-                                           "/hub/"
-                                           ,base-url
-                                           ,@(ein:maybe-get-jhconn-user url)))
+                   for cand = (cl-mapcan read-cookies-func paths)
                    until (cl-some (lambda (x) (string= "_xsrf" (car x))) cand)
                    do (ein:log 'info
                         "ein:websocket--prepare-cookies: no _xsrf among %s, retrying."
-                        cand)
-                   do (sleep-for 0.3)
+                        (mapcar #'car cand))
+                   do (ein:accept-output-for 0.3)
                    finally return cand)))
     (dolist (c cookies)
       (ein:websocket-store-cookie

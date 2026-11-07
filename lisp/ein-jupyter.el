@@ -65,7 +65,7 @@ Note some options like '-v' and '-network' are imposed by EIN."
 (defcustom ein:jupyter-server-command "jupyter"
   "The default command to start a jupyter notebook server.
 Changing this to `jupyter-notebook' requires customizing
-`ein:jupyter-server-use-subcommand' to nil."
+`ein:jupyter-server-use-subcommand' to \"\" (omit)."
   :group 'ein
   :type 'string
   :set-after '(ein:jupyter-cannot-find-jupyter)
@@ -88,12 +88,42 @@ Changing this to `jupyter-notebook' requires customizing
          (set-default 'ein:jupyter-server-command value)))
 
 ;;;###autoload
-(defcustom ein:jupyter-server-use-subcommand "notebook"
-  "For JupyterLab 3.0+ change the subcommand to \"server\".
-Users of \"jupyter-notebook\" (as opposed to \"jupyter notebook\") select Omit."
+(defcustom ein:jupyter-server-use-subcommand nil
+  "Subcommand of `ein:jupyter-server-command' that runs the server.
+nil (the default) auto-detects: \"server\" when `jupyter server' is
+installed (Jupyter Server, JupyterLab 3+), else the legacy \"notebook\".
+Users of \"jupyter-notebook\" (as opposed to \"jupyter notebook\")
+select Omit."
   :group 'ein
-  :type '(choice (string :tag "Subcommand" "notebook")
-                 (const :tag "Omit" nil)))
+  :type '(choice (const :tag "Auto-detect" nil)
+                 (string :tag "Subcommand" "server")
+                 (const :tag "Omit" "")))
+
+(defcustom ein:jupyter-server-startup-timeout 30
+  "Seconds to wait for a started Jupyter server to report it is running."
+  :group 'ein
+  :type 'number)
+
+(defvar ein:jupyter--detected-subcommand nil
+  "Cached result of `ein:jupyter--detect-subcommand' for this session.")
+
+(defun ein:jupyter--detect-subcommand ()
+  "Return the server subcommand to use, a string (possibly empty).
+Honour `ein:jupyter-server-use-subcommand'; when it is nil, probe
+`jupyter server --version' once and cache the answer."
+  (or ein:jupyter-server-use-subcommand
+      ein:jupyter--detected-subcommand
+      (setq ein:jupyter--detected-subcommand
+            (if (eq 0 (condition-case nil
+                          (call-process ein:jupyter-server-command nil nil nil
+                                        "server" "--version")
+                        (error nil)))
+                "server"
+              "notebook"))))
+
+(defun ein:jupyter--subcommand-args ()
+  "The subcommand as a list of arguments."
+  (split-string (ein:jupyter--detect-subcommand)))
 
 (defcustom ein:jupyter-server-args '("--no-browser")
   "Add any additional command line options you wish to include
@@ -186,7 +216,7 @@ with `kubectl exec'."
                                 ein:jupyter-docker-additional-switches
                                 ein:jupyter-docker-image)))
                       (t
-                       (append (split-string (or ein:jupyter-server-use-subcommand ""))
+                       (append (ein:jupyter--subcommand-args)
                                (when dir
                                  (list (format "--notebook-dir=%s"
                                                (convert-standard-filename dir))))
@@ -199,7 +229,40 @@ with `kubectl exec'."
                       *ein:jupyter-server-process-name* buf cmd vargs)))
     (ein:log 'info "ein:jupyter-server--run: %s %s" cmd (ein:join-str " " vargs))
     (set-process-query-on-exit-flag proc nil)
+    (set-process-filter proc #'ein:jupyter--server-filter)
     proc))
+
+(defconst ein:jupyter--ready-regexp "\\([[:alnum:]]+\\) is\\( now\\)? running"
+  "Server output line announcing readiness.")
+
+(defun ein:jupyter--server-filter (proc string)
+  "Insert redacted STRING into PROC's buffer and notice readiness.
+Tokens in the URLs the server prints never reach the buffer (SC-012)."
+  (let ((buffer (process-buffer proc)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let ((moving (= (point) (process-mark proc)))
+              (inhibit-read-only t))
+          (save-excursion
+            (goto-char (process-mark proc))
+            (insert (ein:log--redact string))
+            (set-marker (process-mark proc) (point)))
+          (when moving (goto-char (process-mark proc)))))))
+  (let ((tail (concat (or (process-get proc 'ein-tail) "") string)))
+    (when (string-match-p ein:jupyter--ready-regexp tail)
+      (process-put proc 'ein-ready t))
+    (process-put proc 'ein-tail (substring tail (max 0 (- (length tail) 200))))))
+
+(defun ein:jupyter--wait-until-ready (proc timeout)
+  "Wait up to TIMEOUT seconds for PROC to report it is running.
+Waits with `accept-process-output', so timers and other process
+output keep running.  Return non-nil when ready."
+  (let ((deadline (+ (float-time) timeout)))
+    (while (and (not (process-get proc 'ein-ready))
+                (process-live-p proc)
+                (< (float-time) deadline))
+      (accept-process-output proc 0.1))
+    (process-get proc 'ein-ready)))
 
 (defun ein:jupyter-my-url-or-port ()
   (when-let* ((my-pid (aand (ein:jupyter-server-process) (process-id it))))
@@ -211,6 +274,11 @@ with `kubectl exec'."
             (throw 'done (ein:url url))))))))
 
 (defun ein:jupyter-server-ready-p ()
+  (when-let* ((proc (ein:jupyter-server-process)))
+    (process-get proc 'ein-ready)))
+
+(defun ein:jupyter-server--ready-in-buffer-p ()
+  "Legacy readiness check that scans the server buffer."
   (when (ein:jupyter-server-process)
     (with-current-buffer *ein:jupyter-server-buffer-name*
       (save-excursion
@@ -257,7 +325,7 @@ of (PASSWORD TOKEN)."
                 (apply #'ein:jupyter-process-lines url-or-port
                        ein:jupyter-server-command
                        (append
-                        (split-string (or ein:jupyter-server-use-subcommand ""))
+                        (ein:jupyter--subcommand-args)
                         '("list" "--json")))
                 with token0
                 with password0
@@ -266,7 +334,7 @@ of (PASSWORD TOKEN)."
                          (ein:json-read-from-string line)
                        (prog1 (equal (ein:url url) url-or-port)
                          (setq password0 password) ;; t or :json-false
-                         (setq token0 token)))
+                         (setq token0 (ein:log--register-secret token))))
                 return (list password0 token0))
       it (list nil nil)))
 
@@ -277,7 +345,7 @@ of (PASSWORD TOKEN)."
            (apply #'ein:jupyter-process-lines nil
                   ein:jupyter-server-command
                   (append
-                   (split-string (or ein:jupyter-server-use-subcommand ""))
+                   (ein:jupyter--subcommand-args)
                    '("list" "--json")))
            collecting (ein:json-read-from-string line)))
 
@@ -335,20 +403,18 @@ server command."
                                        (when (numberp port)
                                          `("--port" ,(format "%s" port)
                                            "--port-retries" "0")))))
-    (cl-loop repeat 30
-             until (ein:jupyter-server-ready-p)
-             do (sleep-for 0.5)
-             finally do
-             (if-let* ((buffer (get-buffer *ein:jupyter-server-buffer-name*))
-                      (url-or-port (ein:jupyter-my-url-or-port)))
-                 (with-current-buffer buffer
-                   (setq ein:jupyter-server-notebook-directory
-                         (convert-standard-filename notebook-directory))
-                   (add-hook 'kill-buffer-query-functions
-                             (lambda () (or (not (ein:jupyter-server-process))
-                                            (ein:jupyter-server-stop t url-or-port)))
-                             nil t))
-               (ein:log 'warn "Jupyter server failed to start, cancelling operation")))
+    (if-let* (((ein:jupyter--wait-until-ready proc ein:jupyter-server-startup-timeout))
+              (buffer (get-buffer *ein:jupyter-server-buffer-name*))
+              (url-or-port (ein:jupyter-my-url-or-port)))
+        (with-current-buffer buffer
+          (setq ein:jupyter-server-notebook-directory
+                (convert-standard-filename notebook-directory))
+          (add-hook 'kill-buffer-query-functions
+                    (lambda () (or (not (ein:jupyter-server-process))
+                                   (ein:jupyter-server-stop t url-or-port)))
+                    nil t))
+      (ein:log 'warn "Jupyter server failed to start within %s s, cancelling operation"
+               ein:jupyter-server-startup-timeout))
     (when-let* ((login-p (not no-login-p))
                (url-or-port (ein:jupyter-my-url-or-port)))
       (unless login-callback
@@ -399,7 +465,7 @@ server command."
                                            (cl-search "request curl"
                                                       (process-name proc)))
                                          (process-list)))
-                   do (sleep-for 0.5))
+                   do (ein:accept-output-for 0.5))
           (cond (my-p
                  (-when-let* ((proc (ein:jupyter-server-process))
                               (pid (process-id proc)))

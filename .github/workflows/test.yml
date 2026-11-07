@@ -13,12 +13,55 @@ on:
     - 'master'
 
 jobs:
+  # Cask-free batch harness (Makefile targets deps, test-*, lint).
+  # The README "CI VERSION" is the lowest numeric emacs_version here.
   build:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        emacs_version: [27.2, 28.2, 29.1]
+        emacs_version: [29.1, release-snapshot]
+        python-version: ['3.12']
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: emacs ${{ matrix.emacs_version }}
+      uses: purcell/setup-emacs@master
+      with:
+        version: ${{ matrix.emacs_version }}
+
+    - name: jupyter
+      run: pip install jupyter_server ipykernel nbformat
+
+    - name: deps
+      run: make deps
+
+    - name: test-compile
+      run: make test-compile
+
+    - name: test-unit
+      run: make test-unit
+
+    - name: test-integration
+      run: make test-integration
+
+    - name: lint
+      run: make lint
+
+  # Optional: the original Cask-based suite, kept for comparison.
+  legacy:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        emacs_version: [29.1]
         python-version: [3.8]
 
     steps:
@@ -55,14 +98,7 @@ jobs:
       run: |
         echo "$HOME/.cask/bin" >> $GITHUB_PATH
 
-    - name: apt-get
-      if: startsWith(runner.os, 'disable')
-      run: |
-        sudo apt-get -yq update
-        DEBIAN_FRONTEND=noninteractive sudo apt-get -yq install gnutls-bin sharutils nodejs gfortran gnupg2 dirmngr libreadline-dev libcurl4-openssl-dev texlive-latex-base libfuse-dev libxml2-dev libssl-dev libzmq3-dev jupyter-core jupyter-client
-
     - name: test-mem-constrained
       run: |
         pip install yq
         make quick
-      continue-on-error: ${{ matrix.emacs_version == 'snapshot' }}

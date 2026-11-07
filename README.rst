@@ -50,11 +50,59 @@ Then
 
 Alternatively, directly clone this repo and ``make install``.
 
-For jupyterlab 3.0+, reconfigure the subcommand from "notebook" to "server".
-
-::
+EIN detects whether ``jupyter server`` or the legacy ``jupyter notebook``
+subcommand is installed.  To force one::
 
    M-x customize-option RET ein:jupyter-server-use-subcommand RET
+
+Requirements
+============
+* GNU Emacs 29.1 or later.  29.1 provides what the notebook view relies on:
+  ``string-pixel-width`` and ``pixel-fill-region`` (29), ``undo-redo`` (28),
+  native JSON and image ``:max-width``/``:max-height`` (27).
+* Jupyter Server 2.x with ``ipykernel``.  ``nbformat`` is needed only to run
+  the tests.
+
+Development
+===========
+Load EIN from a local clone, ahead of any installed copy::
+
+   (use-package ein
+     :ensure nil
+     :load-path "~/projects/emacs-ipython-notebook/lisp")
+
+Confirm with ``M-: (locate-library "ein")``, which must point into the clone.
+
+Do not leave ``.elc`` files in ``lisp/``: they shadow edited sources.
+``make test-compile`` compiles copies in ``.build/``.  If you do compile in
+place, set ``load-prefer-newer`` to ``t``.
+
+After editing a file, re-evaluate it (``M-x eval-buffer``) for function
+changes.  Changes to ``defvar``/``defcustom`` defaults, macros or EIEIO
+classes need ``M-x unload-feature`` and a reload, or simply an Emacs restart.
+Close open notebooks first.
+
+Make targets (none of them read ``~/.emacs.d``; dependencies go to ``.deps/``):
+
+``make deps``
+   install dependencies into ``.deps/elpa``
+``make test-unit``
+   unit tests, no Jupyter server needed
+``make test-integration``
+   tests tagged ``:integration``; each starts a private ``jupyter server``
+``make test-compile``
+   byte-compile with warnings as errors
+``make lint``
+   package-lint on the main and new files
+``make test-int-legacy``
+   the original ecukes/Cask integration suite
+
+Select test files with ``EIN_TEST_FILES="test/test-ein-cell.el" make test-unit``.
+
+Tested with Emacs 31.1, jupyter_server 2.21.1, ipykernel 7.4.0, nbformat
+5.11.1 and Python 3.14.9 on Linux.  CI runs Emacs 29.1 and the latest
+release with Python 3.12.  See ``doc/compatibility.md`` for what has been
+verified.
 
 Usage
 =====
@@ -79,7 +127,7 @@ How do I...
 
 ... report a bug?
    Note EIN is tested only for *released* GNU Emacs versions
-   26.3
+   29.1
    and later.  Pre-release versions will not work.
 
    First try ``emacs -Q -f package-initialize -f ein:dev-start-debug`` and reproduce the bug.  The ``-Q`` skips any user configuration that might interfere with EIN.

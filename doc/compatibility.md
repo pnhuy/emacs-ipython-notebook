@@ -12,6 +12,18 @@ with `sh tools/audit.sh`):
   JupyterLab 4.6.5; the classic `notebook` package is **not** installed
 - Python 3.14.9
 
+**Scoped compatibility statement (Milestone A).** On the tested environment,
+EIN is compatible with Jupyter Server 2.21.1 for these operations, each
+covered by a passing test: starting and stopping a local server; logging in
+with a token or a password, including a custom `base_url`; listing
+kernelspecs; opening, executing and saving notebooks; interrupting,
+restarting and shutting down kernels; reconnecting after a dropped
+connection or a dead kernel; lossless round-trip of the 16-notebook corpus;
+and conflict-checked saving (C03, C17, C24–C28, C04, C07, C10). No other
+claim is made. JupyterHub, remote servers, Docker mode and LSP remain
+`untested` (C23). The minimum Emacs is 29.1; CI runs 29.1 and the latest
+release.
+
 **Classification labels**
 
 | Label | Meaning |
@@ -59,8 +71,9 @@ with `sh tools/audit.sh`):
 | C30 | Execution routing by msg_id | `working` (T038) | interleaved replies of two executions reach their own callbacks | none | `ein:kernel-out-of-order-routing` |
 | C31 | Kernel shutdown ownership | `working` | kernels not started by this Emacs, or shared by more than one session, ask before shutdown (T049) | none | `ein:integration-shutdown-foreign-kernel-asks` |
 | C32 | Blocking waits (`sleep-for`) | `working` (was `deprecated-but-functional`) | HTTP retries in request callbacks (contents, sessions, kernel session, new notebook) are rescheduled with `run-at-time` instead of `sleep-for`, except under `ein:force-sync`. Command-side wait loops (change kernel, server stop, websocket cookie wait) use `ein:accept-output-for` (T053) | fixed | `test-ein-query.el`, `ein:accept-output-for--waits-full-time-without-sleep` |
-| C34 | Invalid notebook input | `working` | truncated JSON, missing or non-list `cells`, and nbformat 3 are refused with a user error; no buffer is left behind and nothing is registered as opened | none | `ein:notebook-invalid-*` |
 | C33 | ob-ein synchronous wait | `architecturally-limited` | `org-babel-execute:ein` must return a result, so `ob-ein.el` still waits in a loop (results sentinel, kernel live, file deletion). The waits use `ein:accept-output-for` and stay interruptible with `C-g`. Plan Complexity Tracking exception "ob-ein synchronous wait" | none | none (exception) |
+| C34 | Invalid notebook input | `working` | truncated JSON, missing or non-list `cells`, and nbformat 3 are refused with a user error; no buffer is left behind and nothing is registered as opened | none | `ein:notebook-invalid-*` |
+| C35 | Test determinism (SC-010) | `working` | `HOME=$(mktemp -d) make test-unit` passes twice in a row (287/287 both times). No files are left in `/tmp`. The only files written under `HOME` are tool caches: native-comp trampolines in `.emacs.d/eln-cache` and Jupyter's one-time `.jupyter/migrated` marker from tests that probe `jupyter` (T075) | none | `make test-unit` |
 
 ## Round-trip normalizations (G9)
 

@@ -57,6 +57,7 @@
 (require 'ein-nbview-edit)
 (require 'ein-nbview-markdown)
 (require 'ein-nbview-output)
+(require 'ein-nbview-toolbar)
 (require 'ein-completer)
 
 (declare-function ein:kernel-when-ready "ein-kernel")
@@ -193,9 +194,10 @@
   (let ((w (get-buffer-window (current-buffer) t)))
     (max 10 (- (if w (window-body-width w) 80) 12))))
 
-(defun ein:nbview--rule ()
-  "Return a horizontal rule string."
-  (propertize (make-string (ein:nbview--rule-width) (ein:nbview--rule-char))
+(defun ein:nbview--rule (&optional shorten)
+  "Return a horizontal rule string, SHORTEN columns narrower."
+  (propertize (make-string (max 3 (- (ein:nbview--rule-width) (or shorten 0)))
+                           (ein:nbview--rule-char))
               'face 'ein:nbview-cell-rule))
 
 (defun ein:nbview--label (cell)
@@ -213,9 +215,17 @@
    'face 'ein:nbview-prompt))
 
 (defun ein:nbview--header-display (cell)
-  "Return the `display' string of CELL's header."
-  (concat (make-string ein:nbview-cell-spacing ?\n)
-          (ein:nbview--label cell) " " (ein:nbview--rule) "\n"))
+  "Return the `display' string of CELL's header.
+The selected (or hovered) cell's header ends with its toolbar."
+  (let* ((toolbar (and (ein:nbview--cell-toolbar-p cell) (ein:nbview--cell-toolbar)))
+         (s (concat (make-string ein:nbview-cell-spacing ?\n)
+                    (ein:nbview--label cell) " "
+                    (ein:nbview--rule (if toolbar (1+ (string-width toolbar)) 0))
+                    (if toolbar (concat " " toolbar) "")
+                    "\n")))
+    ;; A click on a toolbar button acts on this cell.
+    (add-text-properties 0 (length s) (list 'ein-nbview-cell cell) s)
+    s))
 
 (defun ein:nbview--string (value)
   "Return VALUE, a string or a sequence of strings, as one string."
@@ -276,6 +286,7 @@
   (propertize "\n" 'read-only t 'cursor-intangible t
               'ein-nbview-cell cell 'ein-nbview-part 'header
               'front-sticky t 'rear-nonsticky t
+              'help-echo #'ein:nbview--header-help
               'display (ein:nbview--header-display cell)))
 
 (defun ein:nbview--footer-string (cell)
@@ -886,7 +897,11 @@ Never signals (process filters call it)."
       (ein:nbview--update-selection-overlay view)
       (when old (ein:nbview--decorate-cell view old))
       (when (and cell (not (eq cell old)))
-        (ein:nbview--decorate-cell view cell)))))
+        (ein:nbview--decorate-cell view cell))
+      ;; The cell toolbar follows the selection.
+      (when (and ein:nbview-cell-toolbar (not (eq cell old)))
+        (when old (ein:nbview--render-header view old))
+        (when cell (ein:nbview--render-header view cell))))))
 
 ;;; Commands
 
@@ -1307,6 +1322,8 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "C-c C-z" #'ein:notebook-kernel-interrupt-command
   "C-c C-r" #'ein:notebook-reconnect-session-command
   "C-c C-x C-r" #'ein:notebook-restart-session-command
+  "C-c C-x C-k" #'ein:nbview-select-kernel
+  "C-c C-f" #'ein:nbview-run-all
   "C-x C-w" #'ein:notebook-rename-command
   "<mouse-1>" #'ein:nbview-mouse-select
   "<remap> <undo>" #'ein:nbview-undo

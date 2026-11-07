@@ -444,3 +444,43 @@ Notes:
 - `ein:latex-cache-directory` defaults to a directory under
   `user-emacs-directory`. An `emacs -Q` review run therefore writes its
   cache to `~/.emacs.d/ein/latex-cache/`.
+
+## Toolbar
+
+T157 (US8, FR-040–FR-043): the notebook toolbar in the header line, the
+selected-cell toolbar, and the kernel status, on `smoke.ipynb` with the
+test kernel stub. Emacs 31.1, 2026-11-07. The GUI and terminal setup
+match the earlier reviews: Xvfb with `x-export-frames` at 84 columns,
+and tmux at 100×45. Mouse clicks are sent through each button's own
+`keymap` property (`[header-line mouse-1]` or `[mouse-1]`). Keys are
+sent with `execute-kbd-macro` in command state. Each command was
+stubbed to record that it ran and which cell it acted on.
+
+| check | GUI | terminal |
+|---|---|---|
+| header line: Run All, Restart, Interrupt, Add Code, Add Markdown, Save, kernel name, status | pass (symbols) | pass (`[Run All]`-style ASCII) |
+| every toolbar button runs its command by mouse and has a tooltip | pass | pass |
+| short labels (`▶▶ ↻ ■ ＋C ＋M 💾`) when the full toolbar does not fit the window | pass | n/a (fits in 100 columns) |
+| only the selected cell has a toolbar: Run, Add, Delete, Up, Down, More | pass (`▶ ＋ ✕ ↑ ↓ ⋯`) | pass (`[Run] [+] [x] [^] [v] [...]`) |
+| a cell toolbar click acts on the clicked cell | pass | pass |
+| the cell toolbar follows the selection (`j`) | pass | pass |
+| the header rule is shortened so that the cell toolbar fits on one line | pass | pass |
+| keys: `C-c C-f` run all, `C-c C-x C-k` select kernel, `C-c C-x C-r` restart, `C-c C-z` interrupt, `C-x C-s` save, `C-c C-c` run, `C-c C-b` add, `C-c C-k` delete, `C-c <up>`/`<down>` move, `M-x ein:nbview-more-actions` | pass | pass |
+| busy, idle and disconnected show in the header line and as `[STATUS]` in the mode line, with no cell re-rendered | pass | pass |
+| invariants hold | pass | pass |
+
+Notes:
+
+- Every button runs an ordinary command, so the toolbars can be turned
+  off with `ein:nbview-toolbar` and `ein:nbview-cell-toolbar`. Nothing
+  is lost when they are off.
+- More Actions offers: change type, split, merge, clear output,
+  collapse input or output, expand truncated output, copy source, copy
+  output, and view output.
+- Notebook and kernel messages (for example "Kernel busy...") come
+  after the toolbar. They may be cut off in narrow windows, and they
+  never change the toolbar labels.
+- The toolbar on the cell under the mouse (`ein:nbview-toolbar-on-hover`)
+  needs a real pointer, so it was not exercised in these batch runs.
+- With `emacs -nw`, mouse clicks need `xterm-mouse-mode`. The terminal
+  row above was checked through the keymap and not with a physical mouse.

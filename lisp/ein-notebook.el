@@ -65,6 +65,7 @@
 (declare-function pm-innermost-span "polymode-core")
 (declare-function pm-span-buffer "polymode-core")
 (declare-function ein:nbview-open "ein-nbview")
+(declare-function ein:nbview-toolbar-setup "ein-nbview-toolbar")
 
 (make-obsolete-variable 'ein:use-smartrep nil "0.17.0")
 
@@ -462,6 +463,7 @@ Nothing executes: saved cells are only displayed."
         (ein:worksheet-bind-events ws)
         (ein:worksheet-set-kernel ws)
         (ein:notebook--notification-setup notebook)
+        (ein:nbview-toolbar-setup notebook view)
         (set-buffer-modified-p nil)
         (setq buffer-undo-list nil)))))
 

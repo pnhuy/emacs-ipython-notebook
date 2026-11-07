@@ -99,6 +99,21 @@
         (ein:testing-copy-command #'ein:nbview-yank-cell)
         (should (equal text (ein:view-cell-text view (ein:nbview--cell-at (point)))))))))
 
+(ert-deftest ein:nbview-cut-yank-cell ()
+  (ein:testing-with-copy-nbview
+    (let* ((view ein:nbview--view)
+           (cells (ein:view-cells view))
+           (code (cadr cells)))
+      (ein:nbview-select-cell code)
+      (ein:testing-copy-command #'ein:nbview-cut-cell)
+      (should (equal (list (car cells)) (ein:view-cells view)))
+      (ein:nbview-select-cell (car cells))
+      (ein:testing-copy-command #'ein:nbview-yank-cell)
+      (let ((new (cadr (ein:view-cells view))))
+        (should (equal "code" (slot-value new 'cell-type)))
+        (should (equal (slot-value code 'outputs) (slot-value new 'outputs))))
+      (should (ein:nbview--check-invariants)))))
+
 (ert-deftest ein:nbview-yank-empty-kill-ring ()
   (ein:testing-with-copy-nbview
     (should-error (ein:nbview-yank-cell) :type 'user-error)))

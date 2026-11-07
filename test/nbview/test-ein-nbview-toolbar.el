@@ -192,7 +192,8 @@ constructs the cells view uses: strings, symbols, (:eval FORM), lists."
         (call-interactively #'ein:nbview-more-actions))
       (should called)
       (dolist (re '("type" "Split" "Merge" "Clear output" "input" "output"
-                    "Copy source" "Copy output" "View output"))
+                    "Copy source" "Copy output" "View output"
+                    "Copy cell" "Cut cell" "Paste cell" "traceback"))
         (should (cl-some (lambda (s) (string-match-p re s)) offered))))))
 
 (ert-deftest ein:nbview-toolbar-cell-toolbar-off ()

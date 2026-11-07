@@ -1053,6 +1053,12 @@ are now; yank it with \\[ein:nbview-yank-cell]."
     (ein:kill-new (list (ein:cell-convert cell (slot-value cell 'cell-type))))
     (message "Cell copied")))
 
+(defun ein:nbview-cut-cell ()
+  "Copy the current cell to the EIN cell kill ring, then delete it."
+  (interactive)
+  (ein:nbview-copy-cell)
+  (ein:nbview-delete-cell))
+
 (defun ein:nbview-yank-cell (&optional n)
   "Insert the last copied cell below the current cell.
 With prefix argument N, insert the Nth most recent copy instead, as

@@ -27,7 +27,7 @@
 ;; Environment:
 ;;   EIN_DEPS_DIR       package dir (default <repo>/.deps/elpa)
 ;;   EIN_TEST_SELECTOR  ERT selector, read with `read'
-;;                      (default (not (tag :integration)))
+;;                      (default (not (or (tag :integration) (tag :compile))))
 ;;   EIN_TEST_FILES     optional space-separated list of test files to
 ;;                      load instead of all of them
 ;;
@@ -81,7 +81,7 @@
  (let ((env (getenv "EIN_TEST_SELECTOR")))
    (if (and env (not (string-empty-p env)))
        (car (read-from-string env))
-     '(not (tag :integration)))))
+     '(not (or (tag :integration) (tag :compile))))))
 
 (provide 'ein-test-init)
 ;;; ein-test-init.el ends here

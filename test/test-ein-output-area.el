@@ -40,3 +40,10 @@
    "<p><a href=http://127.0.0.1:8888/files/spam>link</a> normal</p>")
   ("<img><img src=files/sample.png /> normal</p>"
    "<img><img src=http://127.0.0.1:8888/files/sample.png /> normal</p>")))
+
+(ert-deftest ein:output-area-shr-lexical ()
+  "`ein:shr-insert-document' renders a table (lexical-binding safe)."
+  (with-temp-buffer
+    (ein:shr-insert-document
+     (ein:xml-parse-html-string "<table><tr><td>1</td></tr></table>"))
+    (should (string-match-p "1" (buffer-string)))))

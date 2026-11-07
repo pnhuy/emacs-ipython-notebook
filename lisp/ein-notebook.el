@@ -445,10 +445,20 @@ This is equivalent to do ``C-c`` in the console program."
            (ein:$notebook-kernel notebook)
            (ein:$notebook-events notebook)))
 
+(defvar ein:notebook--classic-warned nil
+  "Non-nil once the classic view's deprecation warning was shown.")
+
 (defun ein:notebook--worksheet-render (notebook ws)
   "Render WS of NOTEBOOK in the view chosen by `ein:notebook-view'."
   (if (eq ein:notebook-view 'cells)
       (ein:notebook--worksheet-render-cells notebook ws)
+    (unless ein:notebook--classic-warned
+      (setq ein:notebook--classic-warned t)
+      (display-warning
+       'ein
+       "The classic notebook view is deprecated; set `ein:notebook-view' \
+to `cells' for the cell-based view.  The classic view still works and \
+is not removed."))
     (ein:notebook--worksheet-render-classic notebook ws)))
 
 (defun ein:notebook--worksheet-render-cells (notebook ws)

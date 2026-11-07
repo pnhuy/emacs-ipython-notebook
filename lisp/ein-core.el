@@ -47,9 +47,9 @@
   "How notebooks are presented.
 `cells' is the cell-based view: each cell is a visually separated
 block edited in place, with outputs below it.  `classic' is the
-original ewoc + polymode view, kept as a fallback (deprecated after
-acceptance, not removed).  Takes effect for notebooks opened after
-the change."
+original ewoc + polymode view.  It is deprecated but kept as a
+fallback: choosing it shows a warning once per session.  Takes
+effect for notebooks opened after the change."
   :type '(choice (const :tag "Cell-based view" cells)
                  (const :tag "Classic ewoc + polymode view" classic))
   :group 'ein)

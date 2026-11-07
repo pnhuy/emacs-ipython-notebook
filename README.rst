@@ -283,8 +283,10 @@ Security
 Classic view
 ------------
 ``(setq ein:notebook-view 'classic)`` restores the original ewoc and
-polymode interface for notebooks opened afterwards.  It is kept as a
-fallback; its keys are listed under "Keymap (C-h m)" below.
+polymode interface for notebooks opened afterwards.  The classic view
+is **deprecated**: it still works and is not removed, but it gets no
+new features, and opening a notebook in it shows a warning once per
+session.  Its keys are listed under "Keymap (C-h m)" below.
 
 Limitations
 -----------

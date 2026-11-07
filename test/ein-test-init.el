@@ -71,6 +71,9 @@
 ;; The legacy suites exercise the classic ewoc view; the nbview tests
 ;; bind `ein:notebook-view' to `cells' themselves.
 (setq ein:notebook-view 'classic)
+;; Its deprecation warning is tested by itself.
+(defvar ein:notebook--classic-warned)
+(setq ein:notebook--classic-warned t)
 
 (defun ein:test-init--files ()
   "Return the test files to load."

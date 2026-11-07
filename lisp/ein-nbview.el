@@ -663,12 +663,16 @@ edit state.  A renderer error shows the source in
             (overlay-put ov 'ein-nbview-preview t)
             (overlay-put ov 'evaporate t)
             (condition-case err
-                ;; Hide the source and show the rendering before it.  A
+                ;; Hide the source and show the rendering after it.  A
                 ;; `display' string would not do: Emacs ignores the
-                ;; image `display' properties nested inside it.
+                ;; image `display' properties nested inside it.  Not a
+                ;; `before-string': the hidden source ends where the
+                ;; footer's `before-string' starts, and Emacs may draw
+                ;; that one first, putting the bottom rule above the
+                ;; preview.  `after-string's ending there come first.
                 (let ((render (ein:nbview-render-markdown
                                source (ein:nbview--preview-context view cell))))
-                  (overlay-put ov 'before-string render)
+                  (overlay-put ov 'after-string render)
                   (overlay-put ov 'invisible t))
               (error
                (ein:log 'warn "Markdown preview failed: %s" (error-message-string err))
@@ -1252,7 +1256,8 @@ Editing the cell shows its source again."
           (overlay-put ov 'ein-nbview-input-hidden cell)
           (overlay-put ov 'evaporate t)
           (overlay-put ov 'invisible t)
-          (overlay-put ov 'before-string
+          ;; An `after-string', as for the Markdown preview.
+          (overlay-put ov 'after-string
                        (propertize "[source hidden]" 'face 'ein:nbview-prompt)))))))
 
 (defun ein:nbview--input-enter-edit ()

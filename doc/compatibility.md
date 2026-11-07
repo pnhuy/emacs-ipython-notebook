@@ -371,8 +371,20 @@ Defects found and fixed during the review:
    LaTeX SVGs showed as their fallback text. The preview now hides the
    source (`invisible`) and shows the rendering as the overlay's
    `before-string`. `ein:nbview-md-preview-shown` asserts this.
+   (Later moved to `after-string`; see item 3.)
 2. Unmapped scripts lost their inner conversion: `e^{i\pi}` stayed
    raw. It now renders as `e^{iπ}` (test `ein:latex-text-fallback`).
+3. Found by the T163 walkthrough: in a graphical frame, a Markdown
+   cell's bottom rule was drawn above its preview, on the heading's
+   line, and the cell had no closing rule. The source is invisible, so
+   Emacs draws the preview's `before-string` where the source ends,
+   which is also where the footer's `before-string` starts. In that
+   case Emacs drew the footer's string first. The preview, and the
+   `[source hidden]` placeholder of `ein:nbview-toggle-input`, are now
+   `after-string`s. Emacs always draws those before the `before-string`s
+   at the same position. Present since 777ad2e. Tests:
+   `ein:nbview-md-preview-is-after-string` and
+   `ein:nbview-output-toggle-input`.
 
 Notes:
 

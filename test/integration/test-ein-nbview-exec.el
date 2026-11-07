@@ -169,7 +169,7 @@ another cell runs."
                 (ein:nbview-edit-cell)
                 (should-not (ein:nbview--preview-overlay view md))
                 (ein:nbview-command-state)
-                (should (overlay-get (ein:nbview--preview-overlay view md) 'before-string))
+                (should (overlay-get (ein:nbview--preview-overlay view md) 'after-string))
                 (should (ein:nbview--check-invariants))))
             (let (saved)
               (ein:notebook-save-notebook notebook (lambda (&rest _) (setq saved t)))

@@ -352,7 +352,13 @@ took the prefix of the text after the footer, none at the end)."
       (ein:nbview-select-cell cell)
       (ein:nbview-toggle-input)
       (let ((b (ein:nbview--source-bounds view cell)))
-        (should (invisible-p (car b))))
+        (should (invisible-p (car b)))
+        ;; An `after-string', so it draws above the outputs (see
+        ;; `ein:nbview-md-preview-is-after-string').
+        (let ((ov (ein:nbview--input-overlay view cell)))
+          (should-not (overlay-get ov 'before-string))
+          (should (equal "[source hidden]"
+                         (substring-no-properties (overlay-get ov 'after-string))))))
       (should (equal text (ein:view-cell-text view cell)))
       (should-not (buffer-modified-p))
       (ein:nbview-toggle-input)

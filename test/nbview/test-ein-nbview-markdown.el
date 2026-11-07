@@ -265,7 +265,7 @@
 (defun ein:testing-md-preview (cell)
   "The string previewing CELL, or nil."
   (when-let* ((ov (ein:nbview--preview-overlay ein:nbview--view cell)))
-    (overlay-get ov 'before-string)))
+    (overlay-get ov 'after-string)))
 
 (defun ein:testing-md-source (cell)
   (ein:view-cell-text ein:nbview--view cell))
@@ -322,6 +322,25 @@
       (insert " more")
       (ein:nbview-command-state)
       (should (equal "Title\n\nbold more" (substring-no-properties (ein:testing-md-preview md)))))))
+
+(ert-deftest ein:nbview-md-preview-is-after-string ()
+  "The preview is the hiding overlay's `after-string', never a `before-string'.
+The source is invisible, so the display shows the preview where the
+source ends, at the footer.  There, `before-string's of overlays that
+start earlier and of the footer are drawn in an order that puts the
+footer's bottom rule above the preview (found by T163: the rule was
+drawn left of the heading).  `after-string's of overlays ending there
+always come before the `before-string's of overlays starting there."
+  (ein:testing-with-md-nbview '(("markdown" . "# Smoke\n\nSome *text*.")
+                                ("code" . "x = 1"))
+    (let* ((md (ein:testing-md-cell 0))
+           (ov (ein:nbview--preview-overlay ein:nbview--view md)))
+      (should-not (overlay-get ov 'before-string))
+      (should (equal "Smoke\n\nSome text."
+                     (substring-no-properties (overlay-get ov 'after-string))))
+      ;; The footer starts where the hidden source ends.
+      (should (= (overlay-end ov)
+                 (overlay-start (ein:nbview--footer-overlay ein:nbview--view md)))))))
 
 (ert-deftest ein:nbview-md-preview-structure ()
   "The preview survives insertion, conversion, moves, deletion and undo."

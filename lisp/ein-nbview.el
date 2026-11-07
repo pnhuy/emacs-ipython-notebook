@@ -771,6 +771,79 @@ With a prefix argument, insert a markdown cell."
   (interactive)
   (ein:nbview--convert "code"))
 
+(defun ein:nbview--skip-newlines (pos limit backward)
+  "Move POS over newlines towards LIMIT (BACKWARD: down to it); return it."
+  (if backward
+      (while (and (> pos limit) (eq (char-before pos) ?\n)) (cl-decf pos))
+    (while (and (< pos limit) (eq (char-after pos) ?\n)) (cl-incf pos)))
+  pos)
+
+(defun ein:nbview-split-cell ()
+  "Split the current cell at point; the text after point becomes a new cell.
+Newlines around point are dropped.  The upper part keeps the cell's
+id, metadata and outputs; the lower part is a new cell with a new id.
+One undo step reverts the split."
+  (interactive)
+  (let* ((view (ein:nbview--current-view))
+         (cell (ein:nbview--cell-or-error))
+         (bounds (ein:nbview--source-bounds view cell))
+         (pos (min (max (point) (car bounds)) (cdr bounds)))
+         (head-end (ein:nbview--skip-newlines pos (car bounds) t))
+         (tail-beg (ein:nbview--skip-newlines pos (cdr bounds) nil))
+         (new (ein:nbview--new-cell view (slot-value cell 'cell-type))))
+    (setf (slot-value new 'view) view)
+    (ein:nbview--with-structural-change
+      ;; Later position first so that HEAD-END and TAIL-BEG stay valid.
+      (goto-char (cdr bounds))
+      (delete-char 1)
+      (insert (ein:nbview--footer-string new))
+      (delete-region head-end tail-beg)
+      (goto-char head-end)
+      (insert (ein:nbview--footer-string cell) (ein:nbview--header-string new)))
+    (ein:nbview--scan view)
+    (ein:nbview--set-dirty view)
+    (ein:nbview--decorate-cell view cell)
+    (ein:nbview--goto-source view new)
+    new))
+
+(defun ein:nbview-merge-cell (&optional above)
+  "Merge the cell below into the current cell.
+With prefix argument ABOVE, merge the current cell into the cell above.
+The upper cell keeps its id, metadata and outputs; the sources are
+joined by a newline.  One undo step reverts the merge."
+  (interactive "P")
+  (let* ((view (ein:nbview--current-view))
+         (here (ein:nbview--cell-or-error))
+         (cells (ein:view-cells view))
+         (i (cl-position here cells))
+         (upper (if above (and (> i 0) (nth (1- i) cells)) here))
+         (lower (if above here (nth (1+ i) cells))))
+    (unless (and upper lower)
+      (user-error (if above "No cell above" "No cell below")))
+    (let* ((ub (ein:nbview--source-bounds view upper))
+           (lb (ein:nbview--source-bounds view lower))
+           (offset (and (<= (car ub) (point) (cdr ub)) (- (point) (car ub))))
+           (sep (if (or (= (car ub) (cdr ub)) (= (car lb) (cdr lb))) "" "\n")))
+      (ein:nbview--with-structural-change
+        (goto-char (cdr lb))
+        (delete-char 1)
+        (insert (ein:nbview--footer-string upper))
+        ;; Upper footer and lower header become the separator.
+        (delete-region (cdr ub) (car lb))
+        (goto-char (cdr ub))
+        (insert sep)
+        (with-silent-modifications
+          (remove-list-of-text-properties (cdr ub) (+ (cdr ub) (length sep)
+                                                      (- (cdr lb) (car lb)))
+                                          '(face))))
+      (ein:nbview--scan view)
+      (ein:nbview--set-dirty view)
+      (ein:nbview--decorate-cell view upper)
+      (goto-char (+ (car ub) (or offset (- (cdr ub) (car ub)))))
+      (setf (oref view selected) nil)
+      (ein:view-select-cell view upper)
+      upper)))
+
 (defun ein:nbview-run-cell ()
   "Execute the current code cell.  Its outputs appear below it."
   (interactive)
@@ -785,6 +858,88 @@ With a prefix argument, insert a markdown cell."
          (ein:cell-execute cell)
          (ein:nbview--set-dirty view))))))
 
+;;; Undo
+;;
+;; The buffer is the model: headers and footers carry their cell
+;; object, so the ordinary undo list restores text, cells, their order
+;; and their identity.  Display updates (prompts, outputs, decorations)
+;; never enter it.  The wrappers below only lift read-only text and
+;; repair stale displays afterwards.
+
+(defvar-local ein:nbview--undo-region nil
+  "Markers (BEG . END) around the changes made by the running undo.")
+
+(defun ein:nbview--record-undo-change (beg end _len)
+  "`after-change-functions' recorder active during the undo wrappers."
+  (let ((r ein:nbview--undo-region))
+    (if (null r)
+        (setq ein:nbview--undo-region (cons (copy-marker beg) (copy-marker end t)))
+      (when (< beg (car r)) (set-marker (car r) beg))
+      (when (> end (cdr r)) (set-marker (cdr r) end)))))
+
+(defun ein:nbview--reconcile (beg end)
+  "Repair the cells view after an undo changed BEG..END.
+Refresh the header and footer display of every cell in the range (they
+may be stale copies from the undo list), redecorate those cells,
+rescan the cell positions and select the cell at point."
+  (when-let* ((view ein:nbview--view))
+    (let ((pos (max (point-min) (1- beg)))
+          (end (min (point-max) (1+ end)))
+          (cells (delq nil (list (ein:nbview--cell-at beg) (ein:nbview--cell-at end)))))
+      (while (< pos end)
+        (when-let* ((cell (get-text-property pos 'ein-nbview-cell)))
+          (push cell cells))
+        (setq pos (next-single-property-change pos 'ein-nbview-cell nil end)))
+      (ein:nbview--scan view)
+      (dolist (cell (delete-dups cells))
+        (ein:nbview--render-header view cell)
+        (ein:nbview--render-footer view cell)
+        (ein:nbview--decorate-cell view cell))
+      (ein:nbview--set-dirty view)
+      (setf (oref view selected) nil)
+      (ein:view-select-cell view (ein:nbview--cell-at (point))))))
+
+(defun ein:nbview--call-undo (fn arg)
+  "Call the undo command FN with ARG across read-only cell boundaries."
+  (let ((inhibit-read-only t))
+    (setq ein:nbview--undo-region nil)
+    (add-hook 'after-change-functions #'ein:nbview--record-undo-change nil t)
+    (unwind-protect
+        (funcall fn arg)
+      (remove-hook 'after-change-functions #'ein:nbview--record-undo-change t)
+      (when-let* ((r ein:nbview--undo-region))
+        (setq ein:nbview--undo-region nil)
+        (ein:nbview--reconcile (car r) (cdr r))
+        (set-marker (car r) nil)
+        (set-marker (cdr r) nil)))))
+
+(defun ein:nbview-undo (&optional arg)
+  "Undo, including cell insertion, deletion, movement and conversion.
+ARG is as for `undo'."
+  (interactive "*P")
+  (ein:nbview--call-undo #'undo arg))
+
+(defun ein:nbview-undo-only (&optional arg)
+  "Undo without redoing, across cell operations.  ARG is as for `undo-only'."
+  (interactive "*p")
+  (ein:nbview--call-undo #'undo-only arg))
+
+(defun ein:nbview-undo-redo (&optional arg)
+  "Redo the last undone change, including cell operations.
+ARG is as for `undo-redo'."
+  (interactive "*p")
+  (ein:nbview--call-undo #'undo-redo arg))
+
+(defun ein:nbview--assert-no-undo-entries (fn &optional buffer)
+  "Call FN and signal an error if it added entries to BUFFER's undo list.
+BUFFER defaults to the current buffer.  Return FN's value."
+  (with-current-buffer (or buffer (current-buffer))
+    (let ((before buffer-undo-list))
+      (prog1 (funcall fn)
+        (unless (eq before buffer-undo-list)
+          (error "Undo entries added: %S"
+                 (cl-ldiff buffer-undo-list before)))))))
+
 ;;; Mode
 
 (defvar-keymap ein:nbview-mode-map
@@ -797,7 +952,12 @@ With a prefix argument, insert a markdown cell."
   "C-c C-n" #'ein:nbview-next-cell
   "C-c C-p" #'ein:nbview-previous-cell
   "C-c <up>" #'ein:nbview-move-cell-up
-  "C-c <down>" #'ein:nbview-move-cell-down)
+  "C-c <down>" #'ein:nbview-move-cell-down
+  "C-c C-s" #'ein:nbview-split-cell
+  "C-c RET" #'ein:nbview-merge-cell
+  "<remap> <undo>" #'ein:nbview-undo
+  "<remap> <undo-only>" #'ein:nbview-undo-only
+  "<remap> <undo-redo>" #'ein:nbview-undo-redo)
 
 (define-derived-mode ein:nbview-mode nil "EIN"
   "Major mode of a notebook in the cells view.

@@ -40,7 +40,7 @@ release.
 | id | area | classification | evidence | action | regression test |
 |---|---|---|---|---|---|
 | C01 | Loading from the clone | `working` | `locate-library "ein"` under the real init → `/home/huypham/projects/emacs-ipython-notebook/lisp/ein.el`; no `ein-*` in `~/.emacs.d/elpa`; 0 `.elc` in `lisp/` (audit baseline) | none | `tools/audit.sh --user-init` |
-| C02 | Test harness | `working` | Cask-free `make test-unit`: 222/222 pass in 0.92 s (T006); 227/227 after Phase 3 (T025); 253/253 after US2 (T054); 287/287 after US4 (T071). `make test-integration`: 11/11. Tests use a private `request-storage-directory`, so the user's curl cookie jar cannot leak stale `_xsrf` cookies into them. `test-ein-cell.el` and `test-ein-notebook.el` load now that mocker is installed in `.deps/` | none | `make test-unit` |
+| C02 | Test harness | `working` | Cask-free `make test-unit`: 222/222 pass in 0.92 s (T006); 227/227 after Phase 3 (T025); 253/253 after US2 (T054); 287/287 after US4 (T071); 313/313 after US3 undo (T099). `make test-integration`: 11/11. Tests use a private `request-storage-directory`, so the user's curl cookie jar cannot leak stale `_xsrf` cookies into them. `test-ein-cell.el` and `test-ein-notebook.el` load now that mocker is installed in `.deps/` | none | `make test-unit` |
 | C03 | Open / execute / save (token, localhost) | `working` | Planning smoke run and `test/integration/test-ein-smoke.el` against jupyter_server 2.21.1: open executes nothing, both execution paths return, save passes `nbformat.validate`, ids and `tags` preserved | none | `test-ein-smoke.el` (`:integration`) |
 | C04 | Save normalizations | `working` (was `broken`) | Save used to inject `metadata.name` at notebook level and `metadata.collapsed: false` into every cell (research A4). JSON is now read faithfully (arrays as vectors, `{}` kept) and written back unchanged apart from the documented G9 normalizations below | fixed | `ein:roundtrip-*` (16-notebook corpus), `ein:integration-corpus-roundtrip` |
 | C05 | Server discovery (`ein:process-refresh-processes`, `ein-process.el:120`) | `working` (was `broken`) | destructured `notebook_dir`; jupyter_server 2.x emits `root_dir` (research A5.1). Now reads `root_dir`, falls back to `notebook_dir`, skips entries with neither (T040) | fixed | `ein:process-refresh-root-dir`, `ein:process-refresh-notebook-dir-legacy` |
@@ -49,7 +49,7 @@ release.
 | C08 | Cell identity on move/copy/yank (`ein:cell-convert`) | `working` (was `broken`) | type conversion and move keep id, metadata, outputs and attachments; copy/yank gives a fresh 8-hex id and keeps the rest | fixed | `ein:cell-convert-keeps-identity`, `ein:cell-convert-type-keeps-id`, `ein:cell-copy-yank-fresh-id` |
 | C09 | Short and duplicate cell ids | `working` (was `broken`) | ids shorter than 5 characters no longer crash; duplicate ids on load are repaired (`dup`, `dup-1`, `dup-2`) with a warning | fixed | `short-id.ipynb`, `ein:worksheet-short-id`, `ein:worksheet-duplicate-ids-repaired` |
 | C10 | Save robustness | `working` (was `broken`) | encoding errors abort the save with a message before any request; the body is always UTF-8; before writing, EIN compares the server's `last_modified` with the value it loaded and asks overwrite / reload / cancel on mismatch; the buffer is marked unmodified only on success; a failed save says "retry with C-x C-s" and keeps the buffer modified. Saving while a cell runs writes `execution_count: null` for that cell. Atomic file replacement on the server relies on jupyter_server `FileContentsManager.use_atomic_writing` (default `true`) | fixed | `test-ein-content.el` (G8/G10), `ein:integration-save-conflict` |
-| C11 | Undo of structural operations | `architecturally-limited` | parallel ledger `ein:%which-cell%` rewrites `buffer-undo-list`, disables undo globally on mismatch; structural ops bind `buffer-undo-list` to `t` (A5.7) | redesign in US3 | T093 (claims policy: no undo claim before T093/T101) |
+| C11 | Undo of structural operations | `working` in the cells view; `architecturally-limited` in the classic view (unchanged) | classic: parallel ledger `ein:%which-cell%` rewrites `buffer-undo-list`, disables undo globally on mismatch; structural ops bind `buffer-undo-list` to `t` (A5.7). Cells view: the buffer is the model, so the ordinary undo list covers text and structural edits (see "Undo" below) | redesigned in US3 (T096–T099) | `ein:nbview-undo-property` (3 seeds × 60 ops), `ein:nbview-undo-*`, `ein:worksheet-classic-undo-unchanged` |
 | C12 | poly-ein global advice | `architecturally-limited` | load-time global advice on `syntax-ppss`, `jit-lock-*`, `font-lock-flush`, `scan-lists`, `other-buffer`, `isearch-done`, `pm-*`; `fmakunbound 'poly-lock-mode` (A5.8) | confine to the classic view (plan Complexity Tracking) | T080 case (e) |
 | C13 | Credentials in logs | `working` (was `broken`) | cookie values at `info` (`ein-websocket.el:62`); `raw-header` (`ein-notebooklist.el:739`); hub-token URL in "Login to %s complete"; executed code at debug (`ein-kernel.el:380`); `?token=` URLs in the server buffer (A5.9). Fixed: `ein:log--redact` in every EIN log message, registered secrets (token, password), cookie names only, no `raw-header`, code logged only with `ein:log-include-code`, redacted server buffer (T043–T046). **Limit:** request.el's own `request-log-level`/`request-message-level` set to `debug` dumps raw HTTP bodies, outside EIN's redaction; they default to off | fixed | `ein:log-redact-*`, `ein:kernel-execute-does-not-log-code`, `ein:integration-no-secrets-in-logs` (token-grep over all log buffers: 0 hits) |
 | C14 | Inline images | `ui-enhancement` | `ein:output-area-inlined-images` defaults to `nil`, spawning an external viewer (A5.10) | inline by default in the new view (US9) | US9 renderer tests |
@@ -109,6 +109,44 @@ No allowlist was needed; `ein-markdown-mode.el` was fixed in place.
 | W06 | `rx-constituents`; `org-redisplay-inline-images` (obsolete in Org 9.8); `cl-return-from` without `cl-defun` | `ein-markdown-mode` (`rx-let-eval`), `ob-ein` (`ob-ein--refresh-inline-images` prefers `org-link-preview-refresh`), `ein-utils` (`ein:find-leftmost-column` is a `cl-defun`) | `working` (T023) |
 | W07 | magit/with-editor free variables, unknown functions and slots | `ein-gat` | `working`: `defvar`/`declare-function`; magit-section slots read through `ein:gat--section-slot` (T024). `ein-gat` itself remains `untested` at runtime |
 | W08 | EIEIO obsolete `name` argument (runtime) | `ein-classes` (`ein:notification-status` initforms) | `working`: the unused names were dropped; no code reads object names (T024) |
+
+## Undo
+
+- **Cells view:** unified undo/redo for text, insert, delete, move,
+  convert, split and merge — verified by property test T093 (3 seeds × 60
+  ops). Every undo step restores the exact prior serialization, and
+  redoing all steps restores the final one. Each operation class ran at
+  least twice per seed.
+  - Undo goes back to the as-opened notebook. After that, `undo` signals
+    "No further undo information" and the buffer is unmodified again.
+  - Undo brings back the same cell object (`eq`), with its id, metadata
+    and outputs.
+  - An output that arrives while its cell is deleted is kept and shown
+    once undo restores the cell.
+  - Prompt, output, selection and decoration updates never add undo
+    entries. `ein:nbview--assert-no-undo-entries` checks this in the
+    tests.
+- **Commands:** `undo`, `undo-only` and `undo-redo` are remapped to
+  `ein:nbview-undo`, `ein:nbview-undo-only` and `ein:nbview-undo-redo`.
+  The wrappers let undo cross the read-only cell headers and footers,
+  then call `ein:nbview--reconcile` on the changed region, which
+  refreshes prompts and outputs, redecorates and reselects.
+  - Checked interactively in terminal Emacs via tmux: `C-/` after typing,
+    insert, move and delete returns to the opened notebook, unmodified.
+- **Read-only boundaries:** `kill-region` across two cells signals
+  `text-read-only` and leaves the buffer unchanged.
+- **Split and merge** (`C-c C-s`, `C-c RET`) are single undo steps.
+  - Split: the new cell gets a new id. The upper part keeps the id,
+    metadata and outputs.
+  - Merge: the upper cell keeps its id and metadata; the lower cell's
+    outputs are dropped.
+- **Deviation from T097:** there are no per-cell overlays to recreate.
+  Decorations are text properties, plus one selection overlay that
+  reconcile moves.
+- T100 (separate structural undo ring) was not needed: T093 passes for
+  every operation class.
+- **Classic view:** structural operations not undoable (unchanged legacy limitation).
+- **undo-tree / vundo:** untested.
 
 ## Platform notes
 

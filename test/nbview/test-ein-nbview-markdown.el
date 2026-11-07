@@ -342,6 +342,30 @@ always come before the `before-string's of overlays starting there."
       (should (= (overlay-end ov)
                  (overlay-start (ein:nbview--footer-overlay ein:nbview--view md)))))))
 
+(ert-deftest ein:nbview-md-theme-change-rerenders ()
+  "Enabling or disabling a theme renders previews and outputs again.
+LaTeX images are drawn in the theme's foreground, so after a switch to
+a dark theme they were black on black (found by T163)."
+  (ein:testing-with-md-nbview '(("markdown" . "Euler: $x$") ("code" . "x = 1"))
+    (let ((md (ein:testing-md-cell 0))
+          (code (ein:testing-md-cell 1))
+          (footers nil))
+      (should (memq #'ein:nbview--theme-changed enable-theme-functions))
+      (should (memq #'ein:nbview--theme-changed disable-theme-functions))
+      (cl-letf* ((orig (symbol-function 'ein:nbview--render-footer))
+                 ((symbol-function 'ein:nbview-render-markdown)
+                  (lambda (&rest _) "RERENDERED"))
+                 ((symbol-function 'ein:nbview--render-footer)
+                  (lambda (view cell) (push cell footers) (funcall orig view cell))))
+        (run-hook-with-args 'enable-theme-functions 'some-theme)
+        (should (equal "RERENDERED" (ein:testing-md-preview md)))
+        (should (memq code footers))
+        (setq footers nil)
+        (run-hook-with-args 'disable-theme-functions 'some-theme)
+        (should (memq code footers)))
+      (should-not (buffer-modified-p))
+      (should (ein:nbview--check-invariants)))))
+
 (ert-deftest ein:nbview-md-preview-structure ()
   "The preview survives insertion, conversion, moves, deletion and undo."
   (ein:testing-with-md-nbview '(("markdown" . "# A") ("code" . "x = 1") ("markdown" . "# B"))

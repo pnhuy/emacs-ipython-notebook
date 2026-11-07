@@ -385,6 +385,12 @@ Defects found and fixed during the review:
    at the same position. Present since 777ad2e. Tests:
    `ein:nbview-md-preview-is-after-string` and
    `ein:nbview-output-toggle-input`.
+4. Found by the T163 walkthrough: after switching from a light theme
+   to `modus-vivendi`, LaTeX images in previews stayed black on the
+   dark background. They are drawn in the `default` face's foreground
+   when rendered. Cells-view buffers now render previews and outputs
+   again on `enable-theme-functions` and `disable-theme-functions`
+   (Emacs 29.1+). Test: `ein:nbview-md-theme-change-rerenders`.
 
 Notes:
 

@@ -1436,7 +1436,22 @@ BUFFER defaults to the current buffer.  Return FN's value."
   (add-hook 'post-command-hook #'ein:nbview--post-command nil t)
   (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--preview-enter-edit nil t)
   (add-hook 'ein:nbview-leave-edit-hook #'ein:nbview--preview-leave-edit nil t)
+  ;; Global: one call refreshes every cells-view buffer.
+  (add-hook 'enable-theme-functions #'ein:nbview--theme-changed)
+  (add-hook 'disable-theme-functions #'ein:nbview--theme-changed)
   (setq buffer-undo-list nil))
+
+(defun ein:nbview--theme-changed (&rest _)
+  "Render the previews and outputs of every cells-view buffer again.
+LaTeX images are drawn in the foreground color of the `default' face,
+so after a theme change they would be hard to read, for example black
+on a dark background.  Faces follow the theme by themselves."
+  (dolist (b (buffer-list))
+    (when-let* ((view (buffer-local-value 'ein:nbview--view b)))
+      (with-current-buffer b
+        (dolist (cell (ein:view-cells view))
+          (ein:nbview--refresh-preview view cell)
+          (ein:nbview--render-footer view cell))))))
 
 (defun ein:nbview-open (notebook ws buffer)
   "Show worksheet WS of NOTEBOOK in BUFFER in the cells view; return the view."

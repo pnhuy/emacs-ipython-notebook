@@ -299,6 +299,253 @@ decides when TAB completes through `completion-at-point'."
   (interactive "P")
   (indent-for-tab-command arg))
 
+;;; Command and edit states
+;;
+;; In command state (the default) printable keys are notebook commands
+;; and never insert text; in edit state the selected cell's source is
+;; edited normally.  The state keymaps are installed through buffer-local
+;; `minor-mode-overriding-map-alist' entries, so no global binding
+;; changes.  Selecting another cell while editing keeps edit state, as in
+;; VS Code: the leave hook runs for the old cell and the enter hook for
+;; the new one.  Moving point within a cell runs no hook.
+
+(defcustom ein:nbview-modal t
+  "Non-nil: the cells view has a command state and an edit state.
+Nil: no command state; the buffer behaves like ordinary editing and
+only the `C-c' bindings of `ein:nbview-mode-map' are added.  Takes
+effect for notebooks opened afterwards."
+  :type 'boolean
+  :group 'ein-nbview
+  :package-version '(ein . "0.18"))
+
+(defcustom ein:nbview-escape-key nil
+  "Additional key that leaves edit state, as a `key-valid-p' string.
+Useful in terminals, where ESC is the Meta prefix; `ESC ESC' also
+leaves edit state.  Takes effect for notebooks opened afterwards."
+  :type '(choice (const :tag "None" nil) (key :tag "Key"))
+  :group 'ein-nbview
+  :package-version '(ein . "0.18"))
+
+(defcustom ein:nbview-mouse t
+  "Non-nil: `mouse-1' selects cells and enters edit state."
+  :type 'boolean
+  :group 'ein-nbview
+  :package-version '(ein . "0.18"))
+
+(defvar ein:nbview-enter-edit-hook nil
+  "Normal hook run after a cell enters edit state.
+It runs in the notebook buffer with point in the cell's source; the
+cell is `ein:nbview--selected'.  Errors are logged, not signalled.")
+
+(defvar ein:nbview-leave-edit-hook nil
+  "Normal hook run after a cell leaves edit state.
+It runs in the notebook buffer while `ein:nbview--selected' is still
+the cell being left.  Errors are logged, not signalled.")
+
+(defvar-local ein:nbview--state nil
+  "State of the cells view: `command' or `edit'.")
+
+(defvar-local ein:nbview--selected nil
+  "The selected cell, as seen by the edit hooks.")
+
+(defvar-local ein:nbview--command-active nil
+  "Non-nil when `ein:nbview-command-map' is active.")
+
+(defvar-local ein:nbview--edit-active nil
+  "Non-nil when the edit-state keymap is active.")
+
+(defvar ein:nbview--editing)
+(declare-function ein:nbview-set-editing "ein-nbview")
+(declare-function ein:nbview--current-view "ein-nbview")
+(declare-function ein:nbview--cell-or-error "ein-nbview")
+(declare-function ein:nbview--goto-source "ein-nbview")
+(declare-function ein:nbview-select-cell "ein-nbview")
+(declare-function ein:nbview-run-cell "ein-nbview")
+(declare-function ein:nbview-insert-cell-below "ein-nbview")
+(declare-function ein:view-cells "ein-view")
+(declare-function ein:view-select-cell "ein-view")
+(declare-function ein:nbview-next-cell "ein-nbview")
+(declare-function ein:nbview-previous-cell "ein-nbview")
+(declare-function ein:nbview-insert-cell-above "ein-nbview")
+(declare-function ein:nbview-delete-cell "ein-nbview")
+(declare-function ein:nbview-to-markdown "ein-nbview")
+(declare-function ein:nbview-to-code "ein-nbview")
+(declare-function ein:nbview-undo "ein-nbview")
+(declare-function ein:nbview-move-cell-up "ein-nbview")
+(declare-function ein:nbview-move-cell-down "ein-nbview")
+
+(defvar ein:nbview-command-map
+  (let ((map (make-sparse-keymap)))
+    (suppress-keymap map)
+    (keymap-set map "RET" #'ein:nbview-edit-cell)
+    (keymap-set map "<return>" #'ein:nbview-edit-cell)
+    (keymap-set map "<escape>" #'ein:nbview-command-state)
+    (keymap-set map "j" #'ein:nbview-next-cell)
+    (keymap-set map "<down>" #'ein:nbview-next-cell)
+    (keymap-set map "k" #'ein:nbview-previous-cell)
+    (keymap-set map "<up>" #'ein:nbview-previous-cell)
+    (keymap-set map "a" #'ein:nbview-insert-cell-above)
+    (keymap-set map "b" #'ein:nbview-insert-cell-below)
+    (keymap-set map "d d" #'ein:nbview-delete-cell)
+    (keymap-set map "m" #'ein:nbview-to-markdown)
+    (keymap-set map "y" #'ein:nbview-to-code)
+    (keymap-set map "S-RET" #'ein:nbview-run-and-advance)
+    (keymap-set map "S-<return>" #'ein:nbview-run-and-advance)
+    (keymap-set map "C-RET" #'ein:nbview-run-cell)
+    (keymap-set map "C-<return>" #'ein:nbview-run-cell)
+    (keymap-set map "z" #'ein:nbview-undo)
+    (keymap-set map "M-<up>" #'ein:nbview-move-cell-up)
+    (keymap-set map "M-<down>" #'ein:nbview-move-cell-down)
+    (keymap-set map "?" #'ein:nbview-help)
+    map)
+  "Keymap of the command state of the cells view.
+Built with `suppress-keymap': printable keys without a binding here do
+nothing.  Bindings made by the user are kept when EIN is reloaded.")
+
+(defvar ein:nbview-edit-map
+  (let ((map (make-sparse-keymap)))
+    (keymap-set map "<escape>" #'ein:nbview-command-state)
+    (keymap-set map "ESC ESC" #'ein:nbview-command-state)
+    (keymap-set map "S-RET" #'ein:nbview-run-and-advance)
+    (keymap-set map "S-<return>" #'ein:nbview-run-and-advance)
+    (keymap-set map "C-RET" #'ein:nbview-run-cell)
+    (keymap-set map "C-<return>" #'ein:nbview-run-cell)
+    (keymap-set map "TAB" #'ein:nbview-indent-or-complete)
+    (keymap-set map "RET" #'ein:nbview-newline)
+    map)
+  "Keymap of the edit state of the cells view.
+Keys not bound here keep their usual editing meaning.")
+
+(defvar-local ein:nbview--edit-local-map nil
+  "The edit-state keymap of this buffer.
+`ein:nbview-edit-map', or a child of it binding `ein:nbview-escape-key'.")
+
+(defun ein:nbview--run-edit-hook (hook)
+  "Run HOOK, logging and skipping functions that signal."
+  (run-hook-wrapped
+   hook
+   (lambda (fn)
+     (condition-case err
+         (funcall fn)
+       (error (ein:log 'warn "%s: %S failed: %s" hook fn (error-message-string err))))
+     nil)))
+
+(defun ein:nbview--apply-state ()
+  "Make keymaps, cursor and decorations match `ein:nbview--state'."
+  (let ((edit (eq ein:nbview--state 'edit)))
+    (setq ein:nbview--command-active (and ein:nbview-modal (not edit))
+          ein:nbview--edit-active (and ein:nbview-modal edit))
+    (if ein:nbview-modal
+        (setq-local cursor-type (if edit 'box 'hollow))
+      (kill-local-variable 'cursor-type))
+    (unless (eq (and edit t) (and ein:nbview--editing t))
+      (ein:nbview-set-editing edit))))
+
+(defun ein:nbview-modes-setup ()
+  "Install the command and edit states in the current cells-view buffer."
+  (setq ein:nbview--edit-local-map
+        (if (and ein:nbview-escape-key (key-valid-p ein:nbview-escape-key))
+            (let ((map (make-sparse-keymap)))
+              (set-keymap-parent map ein:nbview-edit-map)
+              (keymap-set map ein:nbview-escape-key #'ein:nbview-command-state)
+              map)
+          ein:nbview-edit-map))
+  (setq-local minor-mode-overriding-map-alist
+              (append `((ein:nbview--command-active . ,ein:nbview-command-map)
+                        (ein:nbview--edit-active . ,ein:nbview--edit-local-map))
+                      (cl-remove-if (lambda (e) (memq (car e) '(ein:nbview--command-active
+                                                                ein:nbview--edit-active)))
+                                    minor-mode-overriding-map-alist)))
+  (setq ein:nbview--state (if ein:nbview-modal 'command 'edit))
+  (ein:nbview--apply-state))
+
+(defun ein:nbview--selection-changed (old new)
+  "Run the edit hooks when the selection moves from OLD to NEW while editing.
+Called by `ein:view-select-cell' before `ein:nbview--selected' becomes NEW."
+  (if (and (eq ein:nbview--state 'edit) (not (eq old new)))
+      (progn
+        (when old (ein:nbview--run-edit-hook 'ein:nbview-leave-edit-hook))
+        (setq ein:nbview--selected new)
+        (when new (ein:nbview--run-edit-hook 'ein:nbview-enter-edit-hook)))
+    (setq ein:nbview--selected new)))
+
+(defun ein:nbview-edit-cell ()
+  "Edit the selected cell: enter edit state with point in its source."
+  (interactive)
+  (let* ((view (ein:nbview--current-view))
+         (cell (ein:nbview--cell-or-error))
+         (bounds (ein:nbview--source-bounds view cell)))
+    (unless (and bounds (<= (car bounds) (point) (cdr bounds)))
+      (ein:nbview--goto-source view cell))
+    (unless (eq ein:nbview--state 'edit)
+      (setq ein:nbview--state 'edit)
+      (setq ein:nbview--selected cell)
+      (ein:nbview--apply-state)
+      (ein:nbview--run-edit-hook 'ein:nbview-enter-edit-hook))))
+
+(defun ein:nbview-command-state ()
+  "Leave edit state for command state.
+Does nothing in command state or when `ein:nbview-modal' is nil."
+  (interactive)
+  (when (and ein:nbview-modal (eq ein:nbview--state 'edit))
+    (ein:nbview--run-edit-hook 'ein:nbview-leave-edit-hook)
+    (setq ein:nbview--state 'command)
+    (ein:nbview--apply-state)))
+
+(defun ein:nbview-run-and-advance ()
+  "Run the current code cell (or leave a Markdown cell), then go to the next.
+At the last cell, a new code cell is added below and edited."
+  (interactive)
+  (let* ((view (ein:nbview--current-view))
+         (cell (ein:nbview--cell-or-error))
+         (cells (ein:view-cells view))
+         (next (cadr (memq cell cells))))
+    (if (ein:codecell-p cell)
+        (ein:nbview-run-cell)
+      (ein:nbview-command-state))
+    (if next
+        (ein:nbview-select-cell next)
+      (ein:nbview-insert-cell-below "code")
+      (ein:nbview-edit-cell))))
+
+(defun ein:nbview-help ()
+  "Show the bindings of the current state."
+  (interactive)
+  (describe-keymap (if (eq ein:nbview--state 'edit)
+                       (or ein:nbview--edit-local-map ein:nbview-edit-map)
+                     ein:nbview-command-map)))
+
+;;; Mouse
+
+(defun ein:nbview-mouse-select (event)
+  "Select the cell clicked by EVENT.
+A click in a source places point there and enters edit state; a click
+on a header, footer or output selects the cell in command state.  With
+`ein:nbview-mouse' nil, only point moves."
+  (interactive "e")
+  (if (not ein:nbview-mouse)
+      (mouse-set-point event)
+    (let* ((posn (event-start event))
+           (window (posn-window posn))
+           (pos (posn-point posn)))
+      (when (windowp window)
+        (select-window window)
+        (set-buffer (window-buffer window)))
+      (when-let* ((view ein:nbview--view)
+                  ((integer-or-marker-p pos))
+                  (cell (ein:nbview--cell-at pos))
+                  (bounds (ein:nbview--source-bounds view cell)))
+        (let ((part (get-text-property pos 'ein-nbview-part)))
+          (if (or (eq part 'header)
+                  (and (eq part 'footer) (posn-string posn))
+                  (not (<= (car bounds) pos (cdr bounds))))
+              (progn
+                (ein:nbview-command-state)
+                (ein:nbview--goto-source view cell))
+            (goto-char pos)
+            (ein:view-select-cell view cell)
+            (ein:nbview-edit-cell)))))))
+
 (provide 'ein-nbview-edit)
 
 ;;; ein-nbview-edit.el ends here

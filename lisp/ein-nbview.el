@@ -59,6 +59,10 @@
 
 (declare-function ein:kernel-when-ready "ein-kernel")
 (declare-function ein:notebook-save-notebook-command "ein-notebook")
+(declare-function ein:notebook-kernel-interrupt-command "ein-notebook")
+(declare-function ein:notebook-reconnect-session-command "ein-notebook")
+(declare-function ein:notebook-restart-session-command "ein-notebook")
+(declare-function ein:notebook-rename-command "ein-notebook")
 (defvar ein:%worksheet%)
 
 ;;; Customization
@@ -639,6 +643,8 @@ Do nothing when CELL is not in the buffer."
   (let ((old (oref view selected)))
     (setf (oref view selected) cell)
     (when (buffer-live-p (oref view buffer))
+      (with-current-buffer (oref view buffer)
+        (ein:nbview--selection-changed ein:nbview--selected cell))
       (ein:nbview--update-selection-overlay view)
       (when old (ein:nbview--decorate-cell view old))
       (when (and cell (not (eq cell old)))
@@ -777,6 +783,11 @@ With a prefix argument, insert a markdown cell."
   (interactive)
   (ein:nbview--convert "code"))
 
+(defun ein:nbview-toggle-cell-type ()
+  "Convert a code cell to Markdown, and any other cell to code."
+  (interactive)
+  (ein:nbview--convert (if (ein:codecell-p (ein:nbview--cell-or-error)) "markdown" "code")))
+
 (defun ein:nbview--skip-newlines (pos limit backward)
   "Move POS over newlines towards LIMIT (BACKWARD: down to it); return it."
   (if backward
@@ -851,10 +862,12 @@ joined by a newline.  One undo step reverts the merge."
       upper)))
 
 (defun ein:nbview-run-cell ()
-  "Execute the current code cell.  Its outputs appear below it."
+  "Execute the current code cell.  Its outputs appear below it.
+In edit state, leave it (see `ein:nbview-modal')."
   (interactive)
   (let* ((view (ein:nbview--current-view))
          (cell (ein:nbview--cell-or-error)))
+    (ein:nbview-command-state)
     (ein:view-cell-text view cell)
     (if (not (ein:codecell-p cell))
         (message "Not a code cell")
@@ -961,6 +974,13 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "C-c <down>" #'ein:nbview-move-cell-down
   "C-c C-s" #'ein:nbview-split-cell
   "C-c RET" #'ein:nbview-merge-cell
+  "C-c C-t" #'ein:nbview-toggle-cell-type
+  "M-RET" #'ein:nbview-run-and-advance
+  "C-c C-z" #'ein:notebook-kernel-interrupt-command
+  "C-c C-r" #'ein:notebook-reconnect-session-command
+  "C-c C-x C-r" #'ein:notebook-restart-session-command
+  "C-x C-w" #'ein:notebook-rename-command
+  "<mouse-1>" #'ein:nbview-mouse-select
   "<remap> <undo>" #'ein:nbview-undo
   "<remap> <undo-only>" #'ein:nbview-undo-only
   "<remap> <undo-redo>" #'ein:nbview-undo-redo
@@ -1003,6 +1023,7 @@ BUFFER defaults to the current buffer.  Return FN's value."
       (setf (ein:worksheet--view ws) view)
       (setq ein:%worksheet% ws)
       (ein:view-render-notebook view notebook)
+      (ein:nbview-modes-setup)
       (set-buffer-modified-p nil)
       (setq buffer-undo-list nil)
       view)))

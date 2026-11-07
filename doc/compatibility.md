@@ -290,3 +290,48 @@ Design deviations from tasks.md T087/T088, all deliberate:
   keymap is US6.
 - **Two windows.** Selection is per buffer. With the buffer shown in
   two windows, the selection follows the window of the last command.
+
+## Command and edit states
+
+T126: a keyboard and mouse walkthrough of the cells view
+(`ein:nbview-modal` = t) on `smoke.ipynb`, against jupyter_server 2.21.1
+with ipykernel 7.4.0. Emacs 31.1, 2026-11-07. Each step was checked by
+reading the state, selection, cell types, sources and prompts through
+`emacsclient`.
+
+- **Terminal:** `emacs -nw -Q` in tmux (`TERM=xterm-256color`), keys
+  sent with `tmux send-keys`.
+- **GUI:** the PGTK build on Xvfb with `GDK_BACKEND=x11`, keys and clicks
+  sent with `xdotool` (XTEST).
+
+| step | terminal | GUI |
+|---|---|---|
+| `j` / `k` move the selection; the cursor is hollow | pass | pass |
+| typing in the command state changes nothing | pass | pass |
+| `RET` edits the selected cell; the cursor is a box | pass | pass |
+| typing, `RET` and `TAB` indent Python (`if x:` → 4 spaces) | pass | not repeated |
+| `ESC ESC` returns to the command state | pass | not repeated |
+| `<escape>` returns to the command state | n/a (see below) | pass |
+| `ESC x` is still `M-x` | pass | not repeated |
+| `d d` deletes the cell; `z` restores it with its prompt and output | pass | pass |
+| `M-<down>` moves the cell; `z` restores the order | pass | pass |
+| `M-RET` runs the cell and advances; at the last cell it adds a code cell and edits it | pass | not repeated |
+| `C-RET` runs the cell and stays in the command state | n/a (see below) | pass |
+| `S-RET` runs and advances | n/a (see below) | pass |
+| a click on source text edits that cell | not applicable | pass |
+| a click on a header selects the cell in the command state | not applicable | pass |
+| a code cell with a syntax error shows its traceback below it | pass | pass |
+
+Terminal notes:
+
+- A terminal sends `ESC` as the Meta prefix, so a single `ESC` waits for
+  the next key. **`ESC ESC`** leaves the edit state.
+  `ein:nbview-escape-key` adds one more key for it, for example `"C-c
+  C-q"` or `"C-["`. `<escape>` exists only in graphical frames.
+- Most terminals send the same bytes for `S-RET`, `C-RET` and `RET`.
+  In a terminal, use **`M-RET`** to run and advance, and **`C-c C-c`**
+  to run the cell.
+
+GUI note: Xvfb has no window manager, so `xdotool key --window` events
+were ignored. XTEST events (`xdotool key` with the pointer over the
+frame) were delivered.

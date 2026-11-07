@@ -497,6 +497,21 @@ http://ipython.org/ipython-doc/dev/development/messaging.html#object-information
       (ein:websocket-send-shell-channel kernel msg)
       (ein:kernel-set-callbacks-for-msg kernel msg-id callbacks))))
 
+(defun ein:kernel-complete (kernel code cursor-pos callback)
+  "Send a `complete_request' for CODE at CURSOR-POS to KERNEL.
+CURSOR-POS counts characters from the start of CODE.  CALLBACK is
+called with the `complete_reply' content.  Return the message id."
+  (cl-assert (ein:kernel-live-p kernel) nil "complete_request: Kernel is not active.")
+  (let* ((msg (ein:kernel--get-msg kernel "complete_request"
+                                   (list :code code :cursor_pos cursor-pos)))
+         (msg-id (plist-get (plist-get msg :header) :msg_id)))
+    (ein:kernel-set-callbacks-for-msg
+     kernel msg-id
+     (list :complete_reply
+           (cons (lambda (cb content _metadata) (funcall cb content)) callback)))
+    (ein:websocket-send-shell-channel kernel msg)
+    msg-id))
+
 (cl-defun ein:kernel-execute (kernel code &optional callbacks
                               &key
                               (silent t)

@@ -87,5 +87,62 @@
         (should (cl-some (lambda (o) (equal "stream" (alist-get 'output_type o)))
                          (alist-get 'outputs code)))))))
 
+(ert-deftest ein:integration-nbview-edit-while-running ()
+  "T107: kernel completion works, and editing stays responsive while
+another cell runs."
+  :tags '(:integration)
+  (ein:testing-with-server (url token)
+    (let ((ein:jupyter-server-use-subcommand "server")
+          (ein:notebook-view 'cells)
+          (file (expand-file-name "busy.ipynb" ein:testing-server-dir))
+          notebook)
+      (copy-file (ein:testing-fixture "smoke.ipynb") file)
+      (unwind-protect
+          (progn
+            (setq notebook (ein:testing-login-and-open
+                            (directory-file-name url) token "busy.ipynb"))
+            (should (ein:testing-wait-until
+                     (lambda () (ein:kernel-live-p (ein:$notebook-kernel notebook)))
+                     30))
+            (with-current-buffer (ein:notebook-buffer notebook)
+              (let* ((view ein:nbview--view)
+                     (runner (nth 1 (ein:view-cells view)))
+                     (ein:completion-timeout 5)
+                     editor)
+                ;; Completion from an idle kernel.
+                (ein:nbview-select-cell runner)
+                (ein:nbview-insert-cell-below "code")
+                (setq editor (ein:nbview--cell-at (point)))
+                (insert "import o")
+                (let ((res (ein:nbview-completion-at-point)))
+                  (should res)
+                  (should (member "os" (nth 2 res))))
+                ;; Run a slow cell.
+                (let ((b (ein:nbview--source-bounds view runner)))
+                  (goto-char (car b))
+                  (delete-region (car b) (cdr b))
+                  (insert "import time\ntime.sleep(5)"))
+                (ein:nbview-select-cell runner)
+                (ein:nbview-run-cell)
+                (should (ein:testing-wait-until (lambda () (oref runner running)) 10))
+                ;; Edit the other cell while it runs.
+                (let ((b (ein:nbview--source-bounds view editor))
+                      (t0 (float-time)))
+                  (goto-char (cdr b))
+                  (insert "\nx = 1")
+                  (delete-char -1)
+                  (should (< (- (float-time) t0) 0.1)))
+                (should (equal "import o\nx = " (ein:view-cell-text view editor)))
+                ;; Completion while busy: an answer or nil, within the timeout.
+                (let ((b (ein:nbview--source-bounds view editor))
+                      (t0 (float-time)))
+                  (goto-char (+ (car b) 8))
+                  (let ((res (ein:nbview-completion-at-point)))
+                    (should (< (- (float-time) t0) (+ ein:completion-timeout 0.5)))
+                    (should (or (null res) (member "os" (nth 2 res))))))
+                (should (ein:testing-wait-until (lambda () (not (oref runner running))) 30))
+                (should (ein:nbview--check-invariants)))))
+        (ein:testing-kill-notebook notebook)))))
+
 (provide 'test-ein-nbview-exec)
 ;;; test-ein-nbview-exec.el ends here

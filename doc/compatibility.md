@@ -20,8 +20,8 @@ kernelspecs; opening, executing and saving notebooks; interrupting,
 restarting and shutting down kernels; reconnecting after a dropped
 connection or a dead kernel; lossless round-trip of the 16-notebook corpus;
 and conflict-checked saving (C03, C17, C24–C28, C04, C07, C10). No other
-claim is made. JupyterHub, remote servers, Docker mode and LSP remain
-`untested` (C23). The minimum Emacs is 29.1; CI runs 29.1 and the latest
+claim is made. JupyterHub, remote servers and Docker mode remain
+`untested` (C23). LSP is unsupported in notebook cells (C36, "LSP"). The minimum Emacs is 29.1; CI runs 29.1 and the latest
 release.
 
 **Classification labels**
@@ -61,7 +61,7 @@ release.
 | C20 | Server URL with trailing slash | `working` (was `broken`) | found by T015: `http://127.0.0.1:P/` built `ws://…//api/kernels/…` (HTTP 404), and `…:P/` and `…:P` were separate keys ("No recorded kernelspecs"). `ein:notebooklist-login` now keys every server by its `ein:url` form (T052) | fixed | `ein:notebooklist-login--canonical-key`, `ein:integration-password-login` |
 | C21 | nbformat list-form `source` passed straight to EIN | `broken` (narrow) | found by T011: `ein:notebook-from-json` signals `invalid-slot-type ein:markdowncell input string` for list-form `source`. Not reachable through Jupyter Server, whose contents API always rejoins lines | none for the server path; `ein:testing-notebook-from-file` rejoins like the server | `test-ein-fixtures.el` |
 | C22 | Login token argument position | `working` (API footgun) | passing the token as the 4th argument of `ein:notebooklist-login` triggers `read-passwd`; the 5th argument works (A4) | document | `test-ein-smoke.el` |
-| C23 | LSP, JupyterHub, remote (non-localhost) servers, Docker mode | `untested` | not exercised on the tested environment. Only `127.0.0.1` URL login was exercised; no hub or Docker setup was available | verify manually; LSP verified only by T115 | none yet |
+| C23 | JupyterHub, remote (non-localhost) servers, Docker mode | `untested` | not exercised on the tested environment. Only `127.0.0.1` URL login was exercised; no hub or Docker setup was available | verify manually | none yet |
 | C24 | Start / stop a local server (`ein:jupyter-server-start`, `-stop`) | `working` | auto-detected `server` subcommand; login callback within 30 s; timers keep running during startup; the process ends on stop | none | `ein:integration-server-start-stop` |
 | C25 | Kernel operations: list kernelspecs, execute, interrupt, restart, shut down | `working` | against jupyter_server 2.21.1 with ipykernel 7.4.0 | none | `ein:integration-kernel-ops`, `ein:kernel-*-check-url` |
 | C26 | Password login, wrong password | `working` | `--PasswordIdentityProvider.hashed_password` server: 1–2 prompts, open/execute/save, password absent from logs; a wrong password fails with a message and no retry loop in < 15 s. Found by T052: jupyter_server 2.x lists such servers as `"password": false, "token": ""`, which EIN read as "authentication disabled"; an empty token now means "unknown" and EIN probes `/login` | fixed | `ein:integration-password-login`, `ein:integration-wrong-password`, `ein:notebooklist-token-or-password--empty-token-is-unknown` |
@@ -74,6 +74,8 @@ release.
 | C33 | ob-ein synchronous wait | `architecturally-limited` | `org-babel-execute:ein` must return a result, so `ob-ein.el` still waits in a loop (results sentinel, kernel live, file deletion). The waits use `ein:accept-output-for` and stay interruptible with `C-g`. Plan Complexity Tracking exception "ob-ein synchronous wait" | none | none (exception) |
 | C34 | Invalid notebook input | `working` | truncated JSON, missing or non-list `cells`, and nbformat 3 are refused with a user error; no buffer is left behind and nothing is registered as opened | none | `ein:notebook-invalid-*` |
 | C35 | Test determinism (SC-010) | `working` | `HOME=$(mktemp -d) make test-unit` passes twice in a row (287/287 both times). No files are left in `/tmp`. The only files written under `HOME` are tool caches: native-comp trampolines in `.emacs.d/eln-cache` and Jupyter's one-time `.jupyter/migrated` marker from tests that probe `jupyter` (T075) | none | `make test-unit` |
+| C36 | LSP (eglot) in notebook cells | `architecturally-limited` | T115 spike, 2026-11-07: eglot 1.24.31 with pylsp 1.15.0 does not manage the cells-view buffer or a shadow buffer, because neither visits a file. See "LSP" | none; kernel completion is the supported mechanism (C37) | spike scripts (evaluation only) |
+| C37 | Code editing in the cells view | `working` | native font-lock, indentation, sexp motion and comments of the kernel language; kernel completion through `completion-at-point`, also while another cell runs. See "Editing" | new (T109–T114) | `test-ein-nbview-edit.el`, `ein:kernel-complete-request-and-reply`, `ein:integration-nbview-edit-while-running` |
 
 ## Round-trip normalizations (G9)
 
@@ -147,6 +149,77 @@ No allowlist was needed; `ein-markdown-mode.el` was fixed in place.
   every operation class.
 - **Classic view:** structural operations not undoable (unchanged legacy limitation).
 - **undo-tree / vundo:** untested.
+
+## Editing
+
+The cells view keeps one major mode, `ein:nbview-mode`. Language features
+are computed in a hidden **shadow buffer** per major mode
+(`" *ein-nbview-shadow:MODE*"`) that holds a copy of the cell source.
+Shadow buffers run the mode without its hooks and are killed with the last
+cells-view buffer.
+
+- **Language:** `metadata.language_info.name`, then
+  `metadata.kernelspec.language`, then the kernelspec. The mode comes from
+  `ein:nbview-language-modes` (default `python` → `python-mode`), then
+  `LANG-mode` if it is a `prog-mode`, else `prog-mode`.
+  `major-mode-remap-alist` is honoured. Names from the notebook never call
+  a minor mode or a non-programming mode.
+- **Highlighting:** `font-lock-fontify-region-function` copies the shadow's
+  faces onto each cell source. Markdown cells use `ein:markdown-mode`.
+  Sources longer than `ein:nbview-native-fontify-max-chars` (20000) are not
+  fontified. Fontification adds no undo entries (tested).
+- **Indentation:** `indent-line-function` indents the line in the shadow and
+  applies the column with `indent-line-to`; other cells never change.
+  `RET` is `ein:nbview-newline` (newline and indent); `TAB` is
+  `ein:nbview-indent-or-complete`, which follows `tab-always-indent`.
+- **Syntax:** `syntax-propertize-function` gives each source its mode's
+  syntax table, so `forward-sexp`, `syntax-ppss` and `comment-dwim` work.
+  Comment syntax comes from the notebook language.
+- **Completion:** `ein:nbview-completion-at-point` sends a Jupyter
+  `complete_request` (`ein:kernel-complete`). It waits at most
+  `ein:completion-timeout` (0.5 s) and stops early on user input. With no
+  live kernel, an error reply or a timeout it returns nil, so other
+  completion functions run.
+  - Live test (jupyter_server 2.21.1, ipykernel 7.4.0): `import o`
+    completes to `os`. While another cell runs `time.sleep(5)`, inserting
+    text takes < 0.1 s and completion returns within the timeout.
+- **Non-Python kernels:** a `javascript` notebook uses `js-mode`; an
+  unknown language uses `prog-mode`. No Python buffer is created for them.
+- **Not provided:** hover/documentation, signature help, diagnostics, go to
+  definition and refactoring. See "LSP".
+
+## LSP
+
+**LSP: unsupported (evaluated 2026-11-07, evidence below).** No working
+path was found, so there is no follow-up task.
+
+Spike (T115, evaluation only, no feature code) on Emacs 31.1, eglot 1.24.31
+and pylsp 1.15.0:
+
+1. **Cells-view buffer.** `buffer-file-name` is nil and the major mode is
+   `ein:nbview-mode`. `eglot-ensure` does nothing (`eglot-managed-p` nil,
+   no server). `M-x eglot` asks which major mode to manage, because no
+   server is associated with `ein:nbview-mode`.
+2. **Shadow buffer** (`python-mode`, no file). `M-x eglot` asks the same
+   question. With an explicit contact
+   (`(eglot 'python-mode '(transient . DIR) 'eglot-lsp-server '("pylsp") 'python)`)
+   pylsp connects, but the buffer is **not managed** (`eglot-managed-p`
+   nil). Eglot manages only buffers that visit a file, since LSP
+   identifies documents by URI.
+3. **Control.** The same text in a real `cell.py` file is managed, and
+   `eglot-completion-at-point` returns `pardir`, `path`, `pathconf`, ...
+   for `os.pa`. The server works; the obstacle is the buffer model.
+
+Other blockers that a file-backed workaround would also hit:
+
+- The notebook buffer mixes languages: code, markdown and outputs.
+- Positions from a server (diagnostics, edits, definitions) refer to a
+  per-cell or concatenated document. They would have to be mapped back
+  into a buffer whose cell offsets change as cells are edited.
+- Writing cell sources to temporary files on every change conflicts with
+  the safe temporary-file rule and the no-hidden-I/O stance.
+
+Kernel completion (C37) is the supported completion mechanism.
 
 ## Platform notes
 

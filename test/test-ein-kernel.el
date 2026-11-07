@@ -193,3 +193,23 @@
       (should (equal (reverse b) '("b1" (reply "ok"))))
       (should-not (ein:kernel-get-callbacks-for-msg kernel id-a))
       (should-not (ein:kernel-get-callbacks-for-msg kernel id-b)))))
+
+(ert-deftest ein:kernel-complete-request-and-reply ()
+  "T112: `ein:kernel-complete' sends complete_request and dispatches its reply."
+  (eintest:with-live-kernel kernel sent
+    (let* (got
+           (id (ein:kernel-complete kernel "import o" 8 (lambda (c) (setq got c))))
+           (msg (car sent)))
+      (should (= 1 (length sent)))
+      (should (equal "complete_request" (plist-get (plist-get msg :header) :msg_type)))
+      (should (equal "import o" (plist-get (plist-get msg :content) :code)))
+      (should (equal 8 (plist-get (plist-get msg :content) :cursor_pos)))
+      (ein:kernel--handle-websocket-reply
+       kernel nil
+       (eintest:frame (eintest:msg "shell" "complete_reply" id
+                                   '(:status "ok" :matches ["os" "open"]
+                                     :cursor_start 7 :cursor_end 8))))
+      (should (equal "ok" (plist-get got :status)))
+      (should (equal ["os" "open"] (plist-get got :matches)))))
+  (let ((kernel (ein:kernel-new 8888 "" nil "/api/kernels" (ein:events-new))))
+    (should-error (ein:kernel-complete kernel "x" 1 #'ignore))))

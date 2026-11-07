@@ -54,6 +54,8 @@
 (require 'ein-log)
 (require 'ein-view)
 (require 'ein-cell)
+(require 'ein-nbview-edit)
+(require 'ein-completer)
 
 (declare-function ein:kernel-when-ready "ein-kernel")
 (declare-function ein:notebook-save-notebook-command "ein-notebook")
@@ -449,17 +451,21 @@ Do nothing when CELL is not in the buffer."
         (when (and (ein:codecell-p cell) (< (1+ h) f))
           (ein:nbview--add-face (1+ h) f 'ein:nbview-code-face))))))
 
+(defun ein:nbview--cells-in (beg end)
+  "Cells whose region intersects BEG..END in the current buffer, in order."
+  (let ((cells (ensure-list (ein:nbview--cell-at beg)))
+        (pos beg))
+    (while (and (< pos end)
+                (setq pos (text-property-any pos end 'ein-nbview-part 'header)))
+      (push (get-text-property pos 'ein-nbview-cell) cells)
+      (setq pos (1+ pos)))
+    (nreverse (delete-dups cells))))
+
 (defun ein:nbview--jit-decorate (beg end)
   "`jit-lock' function: decorate the cells between BEG and END."
   (when-let* ((view ein:nbview--view))
-    (let ((cells (ensure-list (ein:nbview--cell-at beg)))
-          (pos beg))
-      (while (and (< pos end)
-                  (setq pos (text-property-any pos end 'ein-nbview-part 'header)))
-        (push (get-text-property pos 'ein-nbview-cell) cells)
-        (setq pos (1+ pos)))
-      (dolist (cell (delete-dups cells))
-        (ein:nbview--decorate-cell view cell)))))
+    (dolist (cell (ein:nbview--cells-in beg end))
+      (ein:nbview--decorate-cell view cell))))
 
 (defun ein:nbview--selection-face ()
   "Bar face of the selected cell for the current state."
@@ -957,7 +963,9 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "C-c RET" #'ein:nbview-merge-cell
   "<remap> <undo>" #'ein:nbview-undo
   "<remap> <undo-only>" #'ein:nbview-undo-only
-  "<remap> <undo-redo>" #'ein:nbview-undo-redo)
+  "<remap> <undo-redo>" #'ein:nbview-undo-redo
+  "RET" #'ein:nbview-newline
+  "TAB" #'ein:nbview-indent-or-complete)
 
 (define-derived-mode ein:nbview-mode nil "EIN"
   "Major mode of a notebook in the cells view.
@@ -967,9 +975,20 @@ BUFFER defaults to the current buffer.  Return FN's value."
   (setq-local yank-excluded-properties
               (delete-dups
                (append '(read-only cursor-intangible ein-nbview-cell ein-nbview-part
-                                   display line-prefix wrap-prefix face)
+                                   display line-prefix wrap-prefix face
+                                   font-lock-face syntax-table)
                        (and (listp yank-excluded-properties) yank-excluded-properties))))
   (setq-local truncate-lines nil)
+  (setq-local font-lock-defaults
+              '(nil t nil nil
+                    (font-lock-fontify-region-function . ein:nbview--fontify-region)
+                    (font-lock-unfontify-region-function . ein:nbview--unfontify-region)))
+  (setq-local indent-line-function #'ein:nbview-indent-line)
+  (setq-local indent-tabs-mode nil)
+  (setq-local syntax-propertize-function #'ein:nbview--syntax-propertize)
+  (setq-local parse-sexp-lookup-properties t)
+  (add-hook 'completion-at-point-functions #'ein:nbview-completion-at-point nil t)
+  (add-hook 'kill-buffer-hook #'ein:nbview--kill-shadow-buffers nil t)
   (jit-lock-register #'ein:nbview--jit-decorate)
   (add-hook 'post-command-hook #'ein:nbview--post-command nil t)
   (setq buffer-undo-list nil))
@@ -978,6 +997,7 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "Show worksheet WS of NOTEBOOK in BUFFER in the cells view; return the view."
   (with-current-buffer buffer
     (ein:nbview-mode)
+    (ein:nbview-edit-setup notebook)
     (let ((view (make-instance 'ein:nbview :buffer buffer :worksheet ws)))
       (setq ein:nbview--view view)
       (setf (ein:worksheet--view ws) view)

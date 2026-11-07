@@ -199,7 +199,7 @@ See also `ein:cell-max-num-outputs'."
 
 (defun ein:get-kernel--shared-output ()
   (let ((cell (ein:get-cell-at-point--shared-output)))
-    (when (and (eieio-object-p cell) (slot-boundp cell :kernel))
+    (when (and (eieio-object-p cell) (slot-boundp cell 'kernel))
       (slot-value cell 'kernel))))
 
 (defun ein:get-cell-at-point--shared-output ()

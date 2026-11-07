@@ -256,7 +256,7 @@ ERRBACK takes one argument, the resulting buffer."
 (defcustom ein:notebooklist-date-format "%F"
   "The format spec for date in notebooklist mode.
 See `ein:format-time-string'."
-  :type '(or string function)
+  :type '(choice string function)
   :group 'ein)
 
 (defun ein:notebooklist-open--finish (url-or-port callback content)
@@ -343,7 +343,7 @@ See `ein:format-time-string'."
     (if retry
         (ein:log 'error notice)
       (ein:log 'info notice)
-      (sleep-for 0 1500)
+      (sleep-for 1.5)
       (ein:notebooklist-new-notebook url-or-port kernelspec callback no-pop t explicit-path))))
 
 ;;;###autoload

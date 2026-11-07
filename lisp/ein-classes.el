@@ -295,7 +295,6 @@ notebook that saved "*".  So don't add `:type'!")
     :initarg :notebook
     :initform
     (ein:notification-status
-     "NotebookStatus"
      :s2m
      '((notebook_saving.Notebook       . "Saving notebook...")
        (notebook_saved.Notebook        . "Notebook saved")
@@ -305,7 +304,6 @@ notebook that saved "*".  So don't add `:type'!")
     :initarg :kernel
     :initform
     (ein:notification-status
-     "KernelStatus"
      :s2m
      '((status_idle.Kernel . nil)
        (status_busy.Kernel . "Kernel busy...")

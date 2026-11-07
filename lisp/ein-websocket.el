@@ -61,7 +61,7 @@ earlier calls to `request' (request.el)."
                    do (ein:log 'info
                         "ein:websocket--prepare-cookies: no _xsrf among %s, retrying."
                         cand)
-                   do (sleep-for 0 300)
+                   do (sleep-for 0.3)
                    finally return cand)))
     (dolist (c cookies)
       (ein:websocket-store-cookie

@@ -120,7 +120,7 @@ And I don't know if I can on account of the dont-save-cells nonsense."
    (cl-remove-if-not
     #'identity
     (cl-mapcan (lambda (ws)
-                 (when-let ((ws-buf (ein:worksheet-buffer ws)))
+                 (when-let* ((ws-buf (ein:worksheet-buffer ws)))
                    (with-current-buffer ws-buf
                      (mapcar #'buffer-name (eieio-oref pm/polymode '-buffers)))))
                (append (ein:$notebook-worksheets notebook)
@@ -322,7 +322,7 @@ of minor mode."
 ;;; Kernel related things
 
 (defun ein:list-available-kernels (url-or-port)
-  (when-let ((kernelspecs (ein:need-kernelspecs url-or-port)))
+  (when-let* ((kernelspecs (ein:need-kernelspecs url-or-port)))
     (sort (cl-loop for (_key spec) on (ein:plist-exclude kernelspecs '(:default)) by 'cddr
                 collecting (cons (ein:$kernelspec-name spec)
                                  (ein:$kernelspec-display-name spec)))
@@ -353,7 +353,7 @@ notebook buffer then the user will be prompted to select an opened notebook."
                                 (list notebook))
     (cl-loop repeat 10
           until (null (ein:$kernel-websocket (ein:$notebook-kernel notebook)))
-          do (sleep-for 0 500)
+          do (sleep-for 0.5)
           finally return (ein:notebook-open (ein:$notebook-url-or-port notebook)
                                             (ein:$notebook-notebook-path notebook)))))
 
@@ -474,7 +474,7 @@ This is equivalent to do ``C-c`` in the console program."
   (let* ((cells (plist-get data :cells))
          (ws-cells (mapcar (lambda (data) (ein:cell-from-json data)) cells))
          (worksheet (ein:notebook--worksheet-new notebook)))
-    (setf (oref worksheet :saved-cells) ws-cells)
+    (setf (oref worksheet saved-cells) ws-cells)
     ;(mapcar (lambda (data) (message "test %s" (slot-value data 'metadata))) ws-cells)
     (list worksheet)))
 
@@ -603,7 +603,7 @@ NAME is any non-empty string that does not contain '/' or '\\'.
   (mapc #'ein:worksheet-set-buffer-name
         (append (ein:$notebook-worksheets notebook)
                 (ein:$notebook-scratchsheets notebook)))
-  (when-let ((kernel (ein:$notebook-kernel notebook)))
+  (when-let* ((kernel (ein:$notebook-kernel notebook)))
     (ein:session-rename (ein:$kernel-url-or-port kernel)
                         (ein:$kernel-session-id kernel)
                         (ein:$content-path content))
@@ -630,7 +630,7 @@ NAME is any non-empty string that does not contain '/' or '\\'.
      (mapc (lambda (b) (ignore-errors (kill-buffer b))) buffers))))
 
 (defun ein:notebook-kill-buffer-query ()
-  (if-let ((notebook (ein:get-notebook))
+  (if-let* ((notebook (ein:get-notebook))
            (ws ein:%worksheet%))
       (prog1 nil
         (cond ((ein:scratchsheet-p ws)

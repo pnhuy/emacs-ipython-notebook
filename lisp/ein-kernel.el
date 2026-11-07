@@ -188,7 +188,7 @@ CALLBACK of arity 1, the kernel."
          (tries-left (1- (- max-tries iteration))))
     (ein:log 'verbose "ein:kernel-retrieve-session--error [%s], %s tries left"
              (car error-thrown) tries-left)
-    (sleep-for 0 (* (1+ iteration) 500))
+    (sleep-for (* (1+ iteration) 0.5))
     (if (> tries-left 0)
         (ein:kernel-retrieve-session kernel (1+ iteration) callback))))
 

@@ -151,7 +151,7 @@ with the call to the jupyter notebook."
 (defun ein:jupyter-process-lines (_url-or-port command &rest args)
   "If URL-OR-PORT registered as a k8s url, preface COMMAND ARGS
 with `kubectl exec'."
-  (if-let ((found (executable-find command)))
+  (if-let* ((found (executable-find command)))
       (with-temp-buffer
         (let ((status (apply #'call-process found nil t nil args)))
           (if (zerop status)
@@ -202,7 +202,7 @@ with `kubectl exec'."
     proc))
 
 (defun ein:jupyter-my-url-or-port ()
-  (when-let ((my-pid (aand (ein:jupyter-server-process) (process-id it))))
+  (when-let* ((my-pid (aand (ein:jupyter-server-process) (process-id it))))
     (catch 'done
       (dolist (json (ein:jupyter-crib-running-servers))
         (cl-destructuring-bind (&key pid url &allow-other-keys)
@@ -230,7 +230,7 @@ token authentication is enabled. If a token is found use it to
 generate a call to `ein:notebooklist-login' and once
 authenticated open the notebooklist buffer via a call to
 `ein:notebooklist-open'."
-  (if-let ((token (ein:notebooklist-token-or-password url-or-port)))
+  (if-let* ((token (ein:notebooklist-token-or-password url-or-port)))
       (ein:notebooklist-login url-or-port callback nil nil token)
     (ein:log 'error "`(ein:notebooklist-token-or-password %s)` must return non-nil"
 	     url-or-port)))
@@ -337,9 +337,9 @@ server command."
                                            "--port-retries" "0")))))
     (cl-loop repeat 30
              until (ein:jupyter-server-ready-p)
-             do (sleep-for 0 500)
+             do (sleep-for 0.5)
              finally do
-             (if-let ((buffer (get-buffer *ein:jupyter-server-buffer-name*))
+             (if-let* ((buffer (get-buffer *ein:jupyter-server-buffer-name*))
                       (url-or-port (ein:jupyter-my-url-or-port)))
                  (with-current-buffer buffer
                    (setq ein:jupyter-server-notebook-directory
@@ -349,7 +349,7 @@ server command."
                                             (ein:jupyter-server-stop t url-or-port)))
                              nil t))
                (ein:log 'warn "Jupyter server failed to start, cancelling operation")))
-    (when-let ((login-p (not no-login-p))
+    (when-let* ((login-p (not no-login-p))
                (url-or-port (ein:jupyter-my-url-or-port)))
       (unless login-callback
         (setq login-callback #'ignore))
@@ -399,7 +399,7 @@ server command."
                                            (cl-search "request curl"
                                                       (process-name proc)))
                                          (process-list)))
-                   do (sleep-for 0 500))
+                   do (sleep-for 0.5))
           (cond (my-p
                  (-when-let* ((proc (ein:jupyter-server-process))
                               (pid (process-id proc)))

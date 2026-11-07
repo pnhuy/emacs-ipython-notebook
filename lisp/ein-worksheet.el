@@ -394,7 +394,7 @@ Shift in list parlance means removing the front."
   (ein:kernel-url-or-port (ein:worksheet--kernel ws)))
 
 (cl-defmethod ein:worksheet-buffer ((ws ein:worksheet))
-  (ein:and-let* (((slot-boundp ws :ewoc))
+  (ein:and-let* (((slot-boundp ws 'ewoc))
                  (ewoc (ein:worksheet--ewoc ws))
                  (buffer (ewoc-buffer ewoc))
                  ((buffer-live-p buffer)))
@@ -471,7 +471,7 @@ Shift in list parlance means removing the front."
     (ein:worksheet-undo-setup ws)
     (let ((inhibit-read-only t)
           (ewoc (ein:worksheet--ewoc ws)))
-      (if-let ((cells (ein:worksheet--saved-cells ws)))
+      (if-let* ((cells (ein:worksheet--saved-cells ws)))
           (let ((buffer-undo-list t))
             (mapc (lambda (c)
                     (setf (slot-value c 'ewoc) ewoc)
@@ -657,7 +657,7 @@ If you really want use this command, you can do something like this
     (apply #'ewoc-delete
            (slot-value ws 'ewoc)
            (ein:cell-all-element cell)))
-  (setf (oref ws :dirty) t)
+  (setf (oref ws dirty) t)
   (when focus (ein:worksheet-focus-cell)))
 
 (defun ein:worksheet-kill-cell (ws cells &optional focus)
@@ -754,7 +754,7 @@ Insert markdown cell instead of code cell when the prefix argument is given."
       (ein:cell-insert-below pivot cell))
     (ein:worksheet--unshift-undo-list cell (- (ein:cell-input-pos-max cell)
                                               (ein:cell-input-pos-min cell)))
-    (setf (oref ws :dirty) t)
+    (setf (oref ws dirty) t)
     (when focus (ein:cell-goto cell))
     cell))
 
@@ -774,7 +774,7 @@ Insert markdown cell instead of code cell when the prefix argument is given."
           (ein:cell-enter-first cell))))
     (ein:worksheet--unshift-undo-list cell (- (ein:cell-input-pos-max cell)
                                               (ein:cell-input-pos-min cell)))
-    (setf (oref ws :dirty) t)
+    (setf (oref ws dirty) t)
     (when focus (ein:cell-goto cell))
     cell))
 
@@ -1051,7 +1051,7 @@ Do not clear input prompts when the prefix argument is given."
 	       (?a (ein:worksheet-execute-all-cells ws* :above cell*))
 	       (?b (ein:worksheet-execute-all-cells ws* :below cell*))
 	       (t (ein:cell-execute cell*)
-		  (setf (oref ws* :dirty) t)
+		  (setf (oref ws* dirty) t)
 		  (ein:worksheet--unshift-undo-list cell*))))
 	   ws cell batch)))
 	((ein:markdowncell-p cell)

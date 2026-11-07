@@ -132,7 +132,7 @@ defined by Markdown and HTML.  Increasing this produces extra
 whitespace on the left.  Decreasing it may be preferred when
 fewer than six nested heading levels are used."
   :group 'ein:markdown
-  :type 'natnump
+  :type 'natnum
   :safe 'natnump
   :package-version '(ein:markdown-mode . "2.4"))
 
@@ -205,7 +205,6 @@ be used."
 This may be a single string or a list of string. In case of a
 list, the first one that satisfies `char-displayable-p' will be
 used."
-  :type 'string
   :type '(choice
           (string :tag "Single blockquote display string")
           (repeat :tag "List of possible blockquote display strings" string))
@@ -452,7 +451,8 @@ requires Emacs to be built with ImageMagick support."
     "ein:markdown mode specialized `rx-to-string' function.
 This variant supports named Markdown expressions in FORM.
 NO-GROUP non-nil means don't put shy groups around the result."
-    (let ((rx-constituents (append ein:markdown-rx-constituents rx-constituents)))
+    (rx-let-eval (mapcar (lambda (c) (list (car c) (list 'regexp (cdr c))))
+                         ein:markdown-rx-constituents)
       (rx-to-string form no-group)))
 
   (defmacro ein:markdown-rx (&rest regexps)
@@ -1757,7 +1757,7 @@ headers of levels one through six respectively."
   '(2.0 1.7 1.4 1.1 1.0 1.0)
   "List of scaling values for headers of level one through six.
 Used when `markdown-header-scaling' is non-nil."
-  :type 'list
+  :type '(repeat number)
   :initialize 'custom-initialize-default
   :set (lambda (symbol value)
          (set-default symbol value)

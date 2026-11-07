@@ -1,4 +1,4 @@
-;;; ein-output-area.el --- Output area module
+;;; ein-output-area.el --- Output area module  -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2012 Takafumi Arakaki
 
@@ -115,8 +115,16 @@ when REPLACE-P returns non-`nil'."
     #'ein:insert-read-only))
 
 (defun ein:shr-insert-document (dom)
-  "`shr-insert-document' with EIN setting."
-  (eval `(let ,ein:shr-env (shr-insert-document dom))))
+  "`shr-insert-document' with EIN setting.
+Each binding in `ein:shr-env' is (VARIABLE VALUE); VALUE is taken
+literally (a leading `quote' is stripped), never evaluated."
+  (let ((vars (mapcar (lambda (b) (if (consp b) (car b) b)) ein:shr-env))
+        (vals (mapcar (lambda (b)
+                        (let ((v (and (consp b) (cadr b))))
+                          (if (eq (car-safe v) 'quote) (cadr v) v)))
+                      ein:shr-env)))
+    (cl-progv vars vals
+      (shr-insert-document dom))))
 
 (defun ein:insert-html-shr (html-string)
   "Render HTML-STRING using `shr-insert-document'.
@@ -177,7 +185,7 @@ Usage::
                 (stringp html) (> (length html) 300))
        (delq :text/plain types))
      (seq-some (lambda (type)
-                 (when-let ((value (plist-get ,json type)))
+                 (when-let* ((value (plist-get ,json type)))
                    ,@case-body
                    t))
                types)))

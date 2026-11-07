@@ -93,7 +93,7 @@ ERRBACK of arity 1 for the contents."
                (ein:content-query-contents--success url-or-port path callback :data data)
              (ein:log 'verbose "Retry content-query-contents #%s in response to %s"
                       iteration response-status)
-             (sleep-for 0 (* (1+ iteration) 500))
+             (sleep-for (* (1+ iteration) 0.5))
              (ein:content-query-contents url-or-port path callback errback (1+ iteration)))
          (ein:log 'error "ein:content-query-contents--error %s REQUEST-STATUS %s DATA %s"
                   (concat (file-name-as-directory url-or-port) path)
@@ -320,7 +320,7 @@ Call ERRBACK of arity 1 (contents) upon failure."
       (if (and hub-p data (eq response-status 405))
           (ein:content-query-sessions--success url-or-port callback :data data)
         (ein:log 'verbose "Retry sessions #%s in response to %s %S" iteration response-status response)
-        (sleep-for 0 (* (1+ iteration) 500))
+        (sleep-for (* (1+ iteration) 0.5))
         (ein:content-query-sessions url-or-port callback errback (1+ iteration)))
     (ein:log 'error "ein:content-query-sessions--error %s: ERROR %s DATA %s" url-or-port (car error-thrown) (cdr error-thrown))
     (when errback (funcall errback nil))))

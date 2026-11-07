@@ -28,6 +28,24 @@
 (require 'magit-process nil t)
 (autoload 'ein:jupyter-running-notebook-directory "ein-jupyter")
 
+;; Optional magit/with-editor integration: declared so the file
+;; byte-compiles cleanly whether or not magit is installed.
+(defvar magit-inhibit-refresh)
+(defvar magit-process-popup-time)
+(defvar magit-process-raise-error)
+(defvar magit-process-display-mode-line-error)
+(defvar magit-buffer-name-format)
+(defvar with-editor-emacsclient-executable)
+(declare-function magit--process-coding-system "magit-process")
+(declare-function magit-call-process "magit-process")
+(declare-function magit-start-process "magit-process")
+(declare-function magit-process-sentinel "magit-process")
+(declare-function magit-process-filter "magit-process")
+(declare-function magit-process-mode "magit-process")
+(declare-function magit-refresh "magit-mode")
+(declare-function with-editor-mode "with-editor")
+(declare-function server-running-p "server")
+(declare-function with-editor-set-process-filter "with-editor")
 ;; (declare-function magit--process-coding-system "magit-process")
 ;; (declare-function magit-call-process "magit-process")
 ;; (declare-function magit-start-process "magit-process")
@@ -162,7 +180,7 @@
              (when print-message
                (message it))))
           (t
-           (if-let ((notebook-dir (ein:jupyter-running-notebook-directory))
+           (if-let* ((notebook-dir (ein:jupyter-running-notebook-directory))
                     (notebook (ein:get-notebook))
                     (where (directory-file-name
                             (concat (file-name-as-directory notebook-dir)
@@ -194,7 +212,7 @@ other processes?"
       (goto-char (process-mark proc))
       ;; Find last ^M in string.  If one was found, ignore
       ;; everything before it and delete the current line.
-      (when-let ((ret-pos (cl-position ?\r string :from-end t)))
+      (when-let* ((ret-pos (cl-position ?\r string :from-end t)))
         (cl-callf substring string (1+ ret-pos))
         (delete-region (line-beginning-position) (point)))
       (insert (propertize (ansi-color-filter-apply string) 'magit-section
@@ -205,6 +223,10 @@ other processes?"
 ;; (defvar inhibit-magit-refresh)
 ;; (defvar magit-process-raise-error)
 ;; (defvar magit-process-display-mode-line-error)
+(defun ein:gat--section-slot (section slot)
+  "Return SLOT of magit SECTION (magit is optional at compile time)."
+  (eieio-oref section slot))
+
 (cl-defun ein:gat-chain (buffer callback exec &rest args &key public-ip-address notebook-dir &allow-other-keys)
   (declare (indent 0))
   (let* ((default-directory (or notebook-dir (ein:gat-where-am-i)))
@@ -247,14 +269,14 @@ other processes?"
           ((or (zerop gat-status) gat-status-cd-p)
            (alet (and (bufferp process-buf)
                       (with-current-buffer process-buf
-                        (when (integer-or-marker-p (oref section content))
-                          (buffer-substring-no-properties (oref section content)
-                                                          (oref section end)))))
+                        (when (integer-or-marker-p (ein:gat--section-slot section 'content))
+                          (buffer-substring-no-properties (ein:gat--section-slot section 'content)
+                                                          (ein:gat--section-slot section 'end)))))
              (when it
                (when gat-status-cd-p
                  (setq worktree-dir (when (string-match "^cd\\s-+\\(\\S-+\\)" it)
                                           (string-trim (match-string 1 it)))))
-               (when-let ((last-line (car (last (split-string (string-trim it) "\n")))))
+               (when-let* ((last-line (car (last (split-string (string-trim it) "\n")))))
                  (setq new-public-ip-address
                        (when (string-match "^\\([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+\\)" last-line)
                          (string-trim (match-string 1 last-line))))))
@@ -266,7 +288,7 @@ other processes?"
                         (append
                          (when worktree-dir
                            `(:worktree-dir ,worktree-dir))
-                         (when-let ((address (or new-public-ip-address
+                         (when-let* ((address (or new-public-ip-address
                                                  public-ip-address)))
                            `(:public-ip-address ,address))))))))
           (t
@@ -284,7 +306,7 @@ With WORKTREE-DIR of 3/4/1/2/.gat/fantab,
 With WORKTREE-DIR of /home/dick/gat/test-repo2
 .gat/getout/eager.ipynb -> eager.ipynb
 "
-  (when-let ((root (directory-file-name (or (awhen (cl-search ".gat/" archepath :from-end)
+  (when-let* ((root (directory-file-name (or (awhen (cl-search ".gat/" archepath :from-end)
                                               (cl-subseq archepath 0 it))
                                             (file-name-directory archepath)
                                             ""))))
@@ -364,7 +386,7 @@ With WORKTREE-DIR of /home/dick/gat/test-repo2
 (defun ein:gat-edit (&optional _refresh)
   (interactive "P")
   (ein:gat-install-gat
-   (if-let ((default-directory (ein:gat-where-am-i))
+   (if-let* ((default-directory (ein:gat-where-am-i))
             (gat-chain-args `("gat" nil "--project" ,(ein:gat-project)
                               "--region" ,(ein:gat-region) "--zone" ,(ein:gat-zone))))
        (if (special-variable-p 'magit-process-popup-time)
@@ -393,7 +415,7 @@ With WORKTREE-DIR of /home/dick/gat/test-repo2
 (defun ein:gat-create (&optional _refresh)
   (interactive "P")
   (ein:gat-install-gat
-   (if-let ((default-directory (ein:gat-where-am-i))
+   (if-let* ((default-directory (ein:gat-where-am-i))
             (notebook (ein:get-notebook))
             (gat-chain-args `("gat" nil "--project" ,(ein:gat-project)
                               "--region" ,(ein:gat-region) "--zone" " -")))
@@ -478,7 +500,7 @@ EOF
     result))
 
 (defun ein:gat-kaggle-env (var json-key)
-  (when-let ((val (or (getenv var)
+  (when-let* ((val (or (getenv var)
                       (let ((json (expand-file-name "kaggle.json" "~/.kaggle")))
                         (when (file-exists-p json)
                           (assoc-default json-key (json-read-file json)))))))

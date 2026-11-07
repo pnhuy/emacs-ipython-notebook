@@ -54,7 +54,7 @@
                  :source-notebook notebook))
 
 (cl-defmethod ein:tb-get-buffer ((traceback ein:traceback))
-  (unless (and (slot-boundp traceback :buffer)
+  (unless (and (slot-boundp traceback 'buffer)
                (buffer-live-p (slot-value traceback 'buffer)))
     (let ((buf (get-buffer-create (slot-value traceback 'buffer-name))))
       (setf (slot-value traceback 'buffer) buf)))

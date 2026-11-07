@@ -81,14 +81,14 @@ where NS is `:kernel' or `:notebook' slot of NOTIFICATION."
     (ein:notification-status-set ns status)))
 
 (defun ein:notification--set-execution-count (notification count)
-  (setf (oref notification :execution-count) count))
+  (setf (oref notification execution-count) count))
 
 (defun ein:notification--fadeout-callback (packed _data)
   ;; FIXME: I can simplify this.
   ;;        Do not pass around message, for exmaple.
   (cl-destructuring-bind (ns message status &rest) packed
-    (setf (oref ns :status) status)
-    (setf (oref ns :message) message)
+    (setf (oref ns status) status)
+    (setf (oref ns message) message)
     (apply #'run-at-time
            1 nil
            (lambda (ns _message status next)
@@ -122,7 +122,7 @@ GET-NAME : function
                          :buffer buffer))
     (setq header-line-format ein:header-line-format)
     (ein:notification-bind-events ein:%notification% events)
-    (setf (oref ein:%notification% :tab)
+    (setf (oref ein:%notification% tab)
           (apply #'make-instance 'ein:notification-tab tab-slots))
     ein:%notification%))
 

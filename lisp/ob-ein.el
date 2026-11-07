@@ -163,7 +163,7 @@ notebook (substitute %s with language)."
 
 (defun ob-ein--get-name-create (src-block-info)
   "Get the name of a src block or add a uuid as the name."
-  (if-let ((name (cl-fifth src-block-info)))
+  (if-let* ((name (cl-fifth src-block-info)))
       name
     (save-excursion
       (let ((el (org-element-context))
@@ -239,7 +239,7 @@ e.g., ob-c++ is not ob-C.el."
                                     (regexp-quote *ob-ein-sentinel*)
                                     (org-babel-result-end) t)))
                 until (not pending)
-                do (sleep-for 0 interval)
+                do (sleep-for (/ interval 1000.0))
                 finally return
                 (if pending
                     (prog1 ""
@@ -257,7 +257,7 @@ e.g., ob-c++ is not ob-C.el."
 The callback returns t if results containt RESULT-TYPE outputs, nil otherwise."
   (apply-partially
    (lambda (buffer* params* result-type* result-params* name* cell)
-     (when-let ((raw (aif (ein:oref-safe cell 'traceback)
+     (when-let* ((raw (aif (ein:oref-safe cell 'traceback)
 			 (ansi-color-apply (ein:join-str "\n" it))
 		       (ob-ein--process-outputs result-type* cell params*))))
        (prog1 t
@@ -282,8 +282,14 @@ The callback returns t if results containt RESULT-TYPE outputs, nil otherwise."
 		    result
 		    (cdr (assoc :result-params
 				(cl-third (org-babel-get-src-block-info)))))
-		   (org-redisplay-inline-images)))))))))
+		   (ob-ein--refresh-inline-images)))))))))
    buffer params result-type result-params name))
+
+(defun ob-ein--refresh-inline-images ()
+  "Refresh inline images; `org-redisplay-inline-images' is obsolete in Org 9.8."
+  (if (fboundp 'org-link-preview-refresh)
+      (funcall #'org-link-preview-refresh)
+    (with-no-warnings (org-redisplay-inline-images))))
 
 (defun ob-ein--execute-async-clear (buffer result-params name)
   "Return function of 0-arity to clear *ob-ein-sentinel*."
@@ -299,7 +305,7 @@ The callback returns t if results containt RESULT-TYPE outputs, nil otherwise."
 		 (org-babel-remove-result info))
 	       (org-babel-remove-result) ;; kill #+RESULTS: name
 	       (org-babel-insert-result "" result-params*)
-	       (org-redisplay-inline-images)))))))
+	       (ob-ein--refresh-inline-images)))))))
    buffer result-params name))
 
 (defun ob-ein--execute-async (buffer body kernel params result-type result-params name)
@@ -363,7 +369,7 @@ Install CALLBACK (i.e., cell execution) upon notebook retrieval."
                             (cl-loop repeat 50
                                   for live-p = (ein:kernel-live-p (ein:$notebook-kernel nb))
                                   until live-p
-                                  do (sleep-for 0 300)
+                                  do (sleep-for 0.3)
                                   finally
                                   do (if (not live-p)
                                          (ein:log 'error
@@ -393,7 +399,7 @@ Install CALLBACK (i.e., cell execution) upon notebook retrieval."
                     with fullpath = (concat (file-name-as-directory nbpath) path)
                     for extant = (file-exists-p fullpath)
                     until (not extant)
-                    do (sleep-for 0 500)
+                    do (sleep-for 0.5)
                     finally do (if extant
                                    (ein:display-warning
                                     (format "cannot delete path=%s nbpath=%s"

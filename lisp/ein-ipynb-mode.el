@@ -50,7 +50,7 @@
                            (y-or-n-p "Corresponding run-remote is newer. Replace? (will first backup) "))
                        (setq quit-flag nil)))
                  (message "")))
-      (if-let ((make-backup-files t)
+      (if-let* ((make-backup-files t)
                (where-to (funcall make-backup-file-name-function buffer-file-name)))
           (let* (backup-inhibited
                  (orig-hooks find-file-hook)

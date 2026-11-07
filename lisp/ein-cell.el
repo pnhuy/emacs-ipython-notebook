@@ -116,14 +116,14 @@
 
 (defface ein:cell-output-stderr
   '((((class color) (background light))
-     :background "PeachPuff" ,@(when (>= emacs-major-version 27) '(:extend t)))
+     :background "PeachPuff" :extend t)
     (((class color) (background dark))
-     :background "#8c5353" ,@(when (>= emacs-major-version 27) '(:extend t))))
+     :background "#8c5353" :extend t))
   "Face for stderr cell output"
   :group 'ein)
 
 (defface ein:pos-tip-face
-  '((t (:inherit 'popup-tip-face)))
+  '((t (:inherit popup-tip-face)))
   "Face for tooltip when using pos-tip backend."
   :group 'ein)
 
@@ -213,7 +213,7 @@ WARNING: OBJ and SLOT are evaluated multiple times,
         (when (if (boundp 'mailcap-prefer-mailcap-viewers)
                   mailcap-prefer-mailcap-viewers
                 t)
-          (when-let ((user-entry
+          (when-let* ((user-entry
                       (seq-find (lambda (elem)
                                   (eq (cdr (assq 'source elem)) 'user))
                                 passed)))
@@ -298,7 +298,7 @@ WARNING: OBJ and SLOT are evaluated multiple times,
 (cl-defmethod ein:cell-convert ((cell ein:codecell) _type)
   (let ((new (cl-call-next-method)))
     (when (and (cl-typep new 'ein:codecell)
-               (slot-boundp cell :kernel))
+               (slot-boundp cell 'kernel))
       (setf (slot-value new 'kernel) (slot-value cell 'kernel)))
     new))
 
@@ -517,7 +517,7 @@ Return language name as a string or `nil' when not defined.
       ;; does not need to care about newline (DOM does it for JS).
       ;; FIXME: Maybe I should abstract ewoc in some way and get rid
       ;;        of this.
-      (when-let ((last-out (and (> index 0)
+      (when-let* ((last-out (and (> index 0)
 				(nth (1- index) (slot-value cell 'outputs)))))
         ;; If previous output is stream type, consider adding newline
         (when (equal (plist-get last-out :output_type) "stream")
@@ -1014,7 +1014,7 @@ Called from ewoc pretty printer via `ein:cell-insert-output'."
 
 (cl-defmethod ein:cell--handle-output ((cell ein:codecell) msg-type content _metadata)
   (ein:log 'debug "ein:cell--handle-output (cell ein:codecell): %s" msg-type)
-  (when-let ((json `(:output_type ,msg-type))
+  (when-let* ((json `(:output_type ,msg-type))
              (live-p (buffer-live-p (ein:cell-buffer cell))))
     (cl-macrolet ((copy-props
                    (src tgt props)
@@ -1065,7 +1065,7 @@ Called from ewoc pretty printer via `ein:cell-insert-output'."
 
 (defun ein:cell-recursively-define (what children parent fun1 fun2)
   (cl-loop for child in children
-           append (when-let ((spuds (eieio-class-children child)))
+           append (when-let* ((spuds (eieio-class-children child)))
                     (ein:cell-recursively-define
                      what
                      spuds

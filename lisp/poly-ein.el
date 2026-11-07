@@ -122,7 +122,7 @@
      ;; global-font-lock-mode will call an after-change-mode-hook
      ;; that calls font-lock-initial-fontify, which fontifies the entire buffer!
      (cl-letf (((symbol-function 'global-font-lock-mode-enable-in-buffers) #'ignore))
-       (when-let (b (or (cl-second args) (current-buffer)))
+       (when-let* ((b (or (cl-second args) (current-buffer))))
          (with-current-buffer b
            (unless (eq font-lock-support-mode 'jit-lock-mode)
              (ein:log 'info "pm--mode-setup: deactivating %s in %s"
@@ -136,7 +136,7 @@
      "somewhere between pm--mode-setup and pm--common-setup is a
       kill-all-local-variables that douses any early attempt at
       overriding font-lock-support-mode."
-     (when-let (b (or (cl-second args) (current-buffer)))
+     (when-let* ((b (or (cl-second args) (current-buffer))))
        (with-current-buffer b
          (unless (eq font-lock-support-mode 'jit-lock-mode)
            (ein:log 'info "pm--common-setup: deactivating %s in %s"
@@ -239,7 +239,7 @@ This is a bottleneck as we do this on every `pm-get-span'."
 TYPE can be \\='body, nil."
   (poly-ein-base
    (setq pos (or pos (point)))
-   (when-let ((result-cm cm)
+   (when-let* ((result-cm cm)
               (span `(nil ,(point-min) ,(point-min)))
               (cell (ein:worksheet-get-current-cell :pos pos :noerror t)))
      ;; Change :mode if necessary
@@ -382,7 +382,7 @@ But `C-x b` seems to consult `buffer-list' and not the C (window)->prev_buffers.
   (add-hook 'ido-make-buffer-list-hook
 	    (lambda ()
 	      (defvar ido-temp-list)
-	      (when-let ((visible (pm--buffer-name)))
+	      (when-let* ((visible (pm--buffer-name)))
 		(ido-to-end (delq nil
 				  (mapcar (lambda (x)
 					    (when (string-prefix-p x visible) x))
@@ -391,7 +391,7 @@ But `C-x b` seems to consult `buffer-list' and not the C (window)->prev_buffers.
   (ein:notebook-mode)
   (unless (eq 'ein:notebook-mode (caar minor-mode-map-alist))
     ;; move `ein:notebook-mode' to the head of `minor-mode-map-alist'
-    (when-let ((entry (assq 'ein:notebook-mode minor-mode-map-alist)))
+    (when-let* ((entry (assq 'ein:notebook-mode minor-mode-map-alist)))
       (setf minor-mode-map-alist
 	    (cons entry
 		  (assq-delete-all 'ein:notebook-mode minor-mode-map-alist))))))

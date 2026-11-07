@@ -46,7 +46,7 @@ The proper fix is to sempahore between competing curl processes.")
 
 (defun ein:query-get-cookies (host path-prefix)
   "Return (:path :expire :name :value) for HOST, matching PATH-PREFIX."
-  (when-let ((filename (request--curl-cookie-jar)))
+  (when-let* ((filename (request--curl-cookie-jar)))
     (with-temp-buffer
       (insert-file-contents filename)
       (cl-loop for (domain _flag path _secure _http-only expire name value)

@@ -54,6 +54,7 @@
 (require 'ein-log)
 (require 'ein-view)
 (require 'ein-cell)
+(require 'ein-kill-ring)
 (require 'ein-nbview-edit)
 (require 'ein-nbview-markdown)
 (require 'ein-nbview-output)
@@ -1041,6 +1042,56 @@ With a prefix argument, insert a markdown cell."
   (interactive)
   (ein:nbview--convert (if (ein:codecell-p (ein:nbview--cell-or-error)) "markdown" "code")))
 
+(defun ein:nbview-copy-cell ()
+  "Copy the current cell to the EIN cell kill ring.
+The copy keeps the cell's type, source, outputs and metadata as they
+are now; yank it with \\[ein:nbview-yank-cell]."
+  (interactive)
+  (let* ((view (ein:nbview--current-view))
+         (cell (ein:nbview--cell-or-error)))
+    (ein:view-cell-text view cell)
+    (ein:kill-new (list (ein:cell-convert cell (slot-value cell 'cell-type))))
+    (message "Cell copied")))
+
+(defun ein:nbview-yank-cell (&optional n)
+  "Insert the last copied cell below the current cell.
+With prefix argument N, insert the Nth most recent copy instead, as
+`yank' does.  The inserted cell gets a new id."
+  (interactive (list (let ((arg current-prefix-arg))
+                       (cond ((listp arg) 0)
+                             ((eq arg '-) -2)
+                             (t (1- arg))))))
+  (unless ein:kill-ring (user-error "No copied cell"))
+  (let* ((view (ein:nbview--current-view))
+         (ws (oref view worksheet))
+         (last (ein:nbview--cell-at (point))))
+    (dolist (c (ein:current-kill (or n 0)))
+      (let ((clone (ein:cell-convert c (slot-value c 'cell-type))))
+        (setf (slot-value clone 'cell-id)
+              (ein:cell--fresh-id
+               (mapcar (lambda (x) (slot-value x 'cell-id)) (ein:view-cells view)))
+              (slot-value clone 'view) view)
+        (when ws
+          (setf (slot-value clone 'events) (slot-value ws 'events))
+          (when (ein:codecell-p clone)
+            (setf (slot-value clone 'kernel) (slot-value ws 'kernel))))
+        (ein:view-insert-cell view clone last)
+        (setq last clone)))
+    (ein:nbview--set-dirty view)
+    (ein:nbview--goto-source view last)
+    last))
+
+(defun ein:nbview-show-traceback ()
+  "Show the current cell's error output, with its full traceback."
+  (interactive)
+  (let ((cell (ein:nbview--cell-or-error)))
+    (unless (and (ein:codecell-p cell)
+                 (cl-some (lambda (o)
+                            (member (plist-get o :output_type) '("error" "pyerr")))
+                          (slot-value cell 'outputs)))
+      (user-error "No traceback in this cell"))
+    (ein:nbview-output-view)))
+
 (defun ein:nbview--skip-newlines (pos limit backward)
   "Move POS over newlines towards LIMIT (BACKWARD: down to it); return it."
   (if backward
@@ -1313,6 +1364,9 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "C-c C-s" #'ein:nbview-split-cell
   "C-c RET" #'ein:nbview-merge-cell
   "C-c C-t" #'ein:nbview-toggle-cell-type
+  "C-c C-w" #'ein:nbview-copy-cell
+  "C-c C-y" #'ein:nbview-yank-cell
+  "C-c C-$" #'ein:nbview-show-traceback
   "C-c C-v" #'ein:nbview-toggle-markdown-preview
   "C-c C-e" #'ein:nbview-toggle-output
   "C-c C-l" #'ein:nbview-clear-output

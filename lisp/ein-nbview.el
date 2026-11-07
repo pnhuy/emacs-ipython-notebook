@@ -672,7 +672,9 @@ edit state.  A renderer error shows the source in
                 ;; preview.  `after-string's ending there come first.
                 (let ((render (ein:nbview-render-markdown
                                source (ein:nbview--preview-context view cell))))
-                  (overlay-put ov 'after-string render)
+                  ;; A click on it edits CELL (`ein:nbview-mouse-select').
+                  (overlay-put ov 'after-string
+                               (propertize render 'ein-nbview-source-of cell))
                   (overlay-put ov 'invisible t))
               (error
                (ein:log 'warn "Markdown preview failed: %s" (error-message-string err))
@@ -1258,7 +1260,8 @@ Editing the cell shows its source again."
           (overlay-put ov 'invisible t)
           ;; An `after-string', as for the Markdown preview.
           (overlay-put ov 'after-string
-                       (propertize "[source hidden]" 'face 'ein:nbview-prompt)))))))
+                       (propertize "[source hidden]" 'face 'ein:nbview-prompt
+                                   'ein-nbview-source-of cell)))))))
 
 (defun ein:nbview--input-enter-edit ()
   "`ein:nbview-enter-edit-hook' function: show the edited cell's source."

@@ -342,6 +342,39 @@ always come before the `before-string's of overlays starting there."
       (should (= (overlay-end ov)
                  (overlay-start (ein:nbview--footer-overlay ein:nbview--view md)))))))
 
+(ert-deftest ein:nbview-md-click-preview-edits ()
+  "A click on the preview shows the source for editing (FR-024a).
+Emacs reports a click on an `after-string' at the overlay's end, the
+footer, with the string; that must not read as a click on the footer
+(found by T163).  Same for the `[source hidden]' placeholder."
+  (ein:testing-with-md-nbview '(("code" . "x = 1") ("markdown" . "# Notes\n\ntext"))
+    (let* ((view ein:nbview--view)
+           (code (ein:testing-md-cell 0))
+           (md (ein:testing-md-cell 1))
+           (click (lambda (ov)
+                    ;; What Emacs reports for a click on OV's `after-string'.
+                    (list 'mouse-1
+                          (list (selected-window) (overlay-end ov) '(0 . 0) 0
+                                (cons (overlay-get ov 'after-string) 3)
+                                (overlay-end ov))))))
+      (ein:nbview-select-cell code)
+      (ein:nbview-mouse-select
+       (funcall click (ein:nbview--preview-overlay view md)))
+      (should (eq md (oref view selected)))
+      (should (eq ein:nbview--state 'edit))
+      (should-not (ein:testing-md-preview md))
+      (should (= (point) (car (ein:nbview--source-bounds view md))))
+      ;; The hidden-source placeholder of a code cell.
+      (ein:nbview-command-state)
+      (ein:nbview-select-cell code)
+      (ein:nbview-toggle-input)
+      (ein:nbview-select-cell md)
+      (ein:nbview-mouse-select (funcall click (ein:nbview--input-overlay view code)))
+      (should (eq code (oref view selected)))
+      (should (eq ein:nbview--state 'edit))
+      (should-not (ein:nbview--input-overlay view code))
+      (should (ein:nbview--check-invariants)))))
+
 (ert-deftest ein:nbview-md-theme-change-rerenders ()
   "Enabling or disabling a theme renders previews and outputs again.
 LaTeX images are drawn in the theme's foreground, so after a switch to

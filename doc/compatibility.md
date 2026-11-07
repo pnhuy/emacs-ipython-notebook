@@ -391,6 +391,14 @@ Defects found and fixed during the review:
    when rendered. Cells-view buffers now render previews and outputs
    again on `enable-theme-functions` and `disable-theme-functions`
    (Emacs 29.1+). Test: `ein:nbview-md-theme-change-rerenders`.
+5. Found by the T163 walkthrough, introduced by the fix in item 3: a
+   click on a Markdown preview left the cell in command state instead
+   of opening its source. A click on an `after-string` reports the
+   position where the overlay ends, which is in the footer, so it was
+   read as a footer click. The preview and `[source hidden]` strings
+   now carry an `ein-nbview-source-of` property, and
+   `ein:nbview-mouse-select` edits that cell from the start of its
+   source. Test: `ein:nbview-md-click-preview-edits`.
 
 Notes:
 

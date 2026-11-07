@@ -105,6 +105,187 @@ Alternatively, ob-ein_.
 .. _Cask: https://cask.readthedocs.io/en/latest/guide/installation.html
 .. _Getting started: http://melpa.org/#/getting-started
 
+Cells view
+==========
+Notebooks open in the *cells view* (``ein:notebook-view`` is ``cells``).
+Each cell is a separate block: a header with its type and execution count,
+the source, and the outputs directly below.  Cells are edited in place, in
+one buffer, with the major mode of the notebook language providing
+highlighting and indentation.  Markdown cells show a rendered preview until
+you edit them.
+
+The view has two states, as in Jupyter:
+
+* **Command state** (the default): keys act on cells.  ``j``/``k`` select the
+  next/previous cell; printable keys never insert text.
+* **Edit state**: ``RET`` (or a click on the source) edits the selected cell.
+  Typing is ordinary Emacs editing; ``<escape>`` returns to command state.
+
+Walkthrough
+-----------
+1. Open a notebook (``M-x ein:run`` or ``M-x ein:login``, then pick it in
+   the notebook list).  Nothing is executed on open.
+2. Press ``b`` to add a code cell below, ``RET`` to edit it, and type
+   ``import math; math.pi``.
+3. Press ``S-RET``: the cell runs, its output appears below it, and the next
+   cell is selected (one is created at the end of the notebook).
+4. Press ``m`` to turn a cell into Markdown, ``RET`` to write ``# Title``,
+   then ``<escape>``: the preview shows the heading.
+5. ``C-/`` (or ``z`` in command state) undoes text edits and cell inserts,
+   deletes, moves, type changes, splits and merges.
+6. ``C-x C-s`` saves.
+
+Keys
+----
+Command state (``ein:nbview-command-map``):
+
+=============================  ==========================================
+Key                            Command
+=============================  ==========================================
+``RET``                        edit the selected cell
+``<escape>``                   stay in command state
+``j`` / ``<down>``             next cell
+``k`` / ``<up>``               previous cell
+``a`` / ``b``                  insert a code cell above / below
+``d d``                        delete the cell
+``m`` / ``y``                  convert to Markdown / code
+``S-RET``                      run and advance
+``C-RET``                      run in place
+``z``                          undo
+``M-<up>`` / ``M-<down>``      move the cell up / down
+``o`` / ``O``                  collapse or expand outputs / source
+``?``                          show the bindings
+=============================  ==========================================
+
+Edit state (``ein:nbview-edit-map``); every other key edits as usual:
+
+=============================  ==========================================
+Key                            Command
+=============================  ==========================================
+``<escape>``, ``ESC ESC``      back to command state (restores the preview)
+``S-RET``                      run and advance
+``C-RET``                      run in place
+``RET``                        newline and indent
+``TAB``                        indent or complete (``tab-always-indent``)
+=============================  ==========================================
+
+Both states (``ein:nbview-mode-map``):
+
+=================================  ==========================================
+Key                                Command
+=================================  ==========================================
+``C-c C-c``                        run the cell
+``M-RET``                          run and advance
+``C-c C-f``                        run all cells
+``C-c C-a`` / ``C-c C-b``          insert a cell above / below
+``C-c C-k``                        delete the cell
+``C-c C-w`` / ``C-c C-y``          copy the cell / paste it below
+``C-c C-n`` / ``C-c C-p``          next / previous cell
+``C-c <up>`` / ``C-c <down>``      move the cell up / down
+``C-c C-s`` / ``C-c RET``          split at point / merge with the cell below
+``C-c C-t``                        toggle code / Markdown
+``C-c C-v``                        toggle the Markdown preview
+``C-c C-e``                        collapse or expand outputs
+``C-c C-l`` / ``C-c C-S-l``        clear outputs of the cell / of all cells
+``C-c C-o v`` (``C-c C-o C-o``)    view the cell's outputs in a buffer
+``C-c C-o c`` (``C-c C-o M-w``)    copy the cell's output text
+``C-c C-$``                        show the cell's traceback
+``C-c C-z``                        interrupt the kernel
+``C-c C-r``                        reconnect
+``C-c C-x C-r``                    restart the kernel
+``C-c C-x C-k``                    select the kernel
+``C-x C-s`` / ``C-x C-w``          save / save under a new name
+=================================  ==========================================
+
+``undo``, ``undo-only`` and ``undo-redo`` are remapped, so their usual keys
+work.  All keymaps are ordinary variables that can be changed with
+``keymap-set``.  In graphical Emacs, the header line holds a notebook
+toolbar (Run All, Restart, Interrupt, Add Code, Add Markdown, Save, kernel
+status) and the selected cell shows Run, Add, Delete, Move and More buttons;
+every button has a tooltip and a key.
+
+Customization
+-------------
+``M-x customize-group RET ein-nbview``.  The main options:
+
+=============================================  ==========================================
+Variable (default)                             Meaning
+=============================================  ==========================================
+``ein:notebook-view`` (``cells``)              ``cells`` or ``classic``
+``ein:nbview-modal`` (``t``)                   command and edit states; ``nil``: only the ``C-c`` keys
+``ein:nbview-escape-key`` (``nil``)            an extra key that leaves edit state
+``ein:nbview-mouse`` (``t``)                   ``mouse-1`` selects and edits cells
+``ein:nbview-cell-spacing`` (``1``)            blank lines between cells
+``ein:nbview-markdown-preview`` (``t``)        preview Markdown cells when not editing
+``ein:nbview-language-modes``                  language to major mode (``python`` to ``python-mode``)
+``ein:nbview-native-fontify-max-chars``        longer sources are not highlighted (20000)
+``ein:nbview-inline-images`` (``t``)           show image outputs inline
+``ein:nbview-image-max-width`` (``0.9``)       fraction of the window, or pixels
+``ein:nbview-image-max-height`` (``600``)      pixels
+``ein:nbview-mime-priority``                   preferred output representations
+``ein:nbview-output-max-lines`` (``200``)      longer outputs are truncated (``nil``: no limit)
+``ein:nbview-output-coalesce-delay``           seconds to batch rapid outputs (0.05)
+``ein:nbview-fetch-remote-images`` (``nil``)   fetch ``http(s)`` images in Markdown
+``ein:nbview-remote-image-max-bytes``          size limit for fetched images (5 MiB)
+``ein:nbview-toolbar`` (``t``)                 notebook toolbar in the header line
+``ein:nbview-cell-toolbar`` (``t``)            toolbar on the selected cell
+``ein:nbview-toolbar-on-hover`` (``t``)        also on the cell under the mouse
+``ein:latex-render-method`` (``auto``)         ``auto``, ``image`` or ``text``
+``ein:latex-scale`` (``1.0``)                  size of LaTeX images
+``ein:latex-max-processes`` (``2``)            concurrent LaTeX processes
+``ein:latex-timeout`` (``20``)                 seconds before a LaTeX process is stopped
+``ein:latex-cache-directory``                  rendered formulas (``~/.emacs.d/ein/latex-cache/``)
+``ein:completion-timeout`` (``0.5``)           seconds to wait for kernel completion
+``ein:log-include-code`` (``nil``)             include executed code in debug logs
+=============================================  ==========================================
+
+Hooks: ``ein:nbview-enter-edit-hook`` and ``ein:nbview-leave-edit-hook``.
+
+LaTeX (optional)
+----------------
+Formulas in Markdown and LaTeX outputs are rendered as images when
+``latex`` and ``dvisvgm`` (or ``dvipng``) are installed, for example from
+TeX Live.  Without them, or in a terminal, formulas are shown as Unicode
+text (``e^{iπ}``); constructs without a Unicode form stay as written.  Set
+``ein:latex-render-method`` to ``text`` to never start a process.
+
+Security
+--------
+* Opening a notebook never executes code; cells run only on a run command.
+* Scripts, event handlers and external references are removed from HTML and
+  SVG outputs before rendering.
+* Nothing is fetched over the network by default.  Remote Markdown images
+  show as links until ``ein:nbview-fetch-remote-images`` is set.
+* Tokens, passwords and cookies are redacted from EIN's logs; executed code
+  is logged only with ``ein:log-include-code``.
+* LaTeX runs in a private (mode 700) temporary directory, deleted after
+  every job.
+
+Classic view
+------------
+``(setq ein:notebook-view 'classic)`` restores the original ewoc and
+polymode interface for notebooks opened afterwards.  It is kept as a
+fallback; its keys are listed under "Keymap (C-h m)" below.
+
+Limitations
+-----------
+From ``doc/compatibility.md``:
+
+* LSP (eglot) in notebook cells is unsupported: eglot manages only buffers
+  that visit a file, and the cells view is not one.  Kernel completion is
+  the supported completion mechanism.
+* Hover/documentation, signature help, diagnostics, go to definition and
+  refactoring are not provided.
+* The toolbar on the cell under the mouse (``ein:nbview-toolbar-on-hover``)
+  is best-effort: it needs a graphical frame with a real pointer.
+* Outputs are display text, not buffer text: use ``C-c C-o c`` to copy them
+  and ``C-c C-o v`` to view (and search) them in a buffer.
+* Classic view: structural operations not undoable (unchanged legacy
+  limitation).
+* JupyterHub, remote (non-localhost) servers and Docker mode are untested.
+* undo-tree / vundo: untested.
+* Tested on Linux only.  macOS and Windows are untested.
+
 FAQ
 ===
 
@@ -121,11 +302,7 @@ How do I...
    Then file an issue using ``M-x ein:dev-bug-report-template``.
 
 ... display images inline?
-   We find inserting images into emacs disruptive, and so default to spawning an external viewer.  To override this,
-   ::
-
-      M-x customize-group RET ein
-      Ein:Output Area Inlined Images
+   The cells view shows images inline in graphical Emacs (``ein:nbview-inline-images``).  The classic view does so too by default (``ein:output-area-inlined-images``); set it to ``nil`` to spawn an external viewer instead.
 
 ... configure the external image viewer?
    ::
@@ -136,7 +313,7 @@ How do I...
    On a typical Linux system, one might configure a viewer for MIME Type ``image/png`` as a shell command ``convert %s -background white -alpha remove -alpha off - | display -immutable``.
 
 ... get IDE-like behavior?
-   You can't.  EIN's architecture is fundamentally incompatible with LSP.
+   In the cells view, code cells get their language's highlighting and indentation, and ``TAB`` completes through the kernel.  LSP (eglot) is not supported in notebook cells; see Limitations.
 
 .. _Issues: https://github.com/millejoh/emacs-ipython-notebook/issues
 .. _prevailing documentation: http://millejoh.github.io/emacs-ipython-notebook

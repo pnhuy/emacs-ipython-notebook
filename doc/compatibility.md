@@ -441,6 +441,9 @@ Notes:
   contracts/renderers.md, so the header stays visible when the
   traceback is truncated.
 - Output rendering never touches the buffer text or the undo list.
+  Outputs are display text, not buffer text, so `isearch` does not find
+  them: `C-c C-o c` copies the output text and `C-c C-o v` shows it in a
+  searchable buffer.
 - `ein:latex-cache-directory` defaults to a directory under
   `user-emacs-directory`. An `emacs -Q` review run therefore writes its
   cache to `~/.emacs.d/ein/latex-cache/`.

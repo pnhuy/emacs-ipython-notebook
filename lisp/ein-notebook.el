@@ -49,7 +49,21 @@
 (require 'ein-traceback)
 (require 'ein-python-send)
 
+(require 'ein-view)
+
 (autoload 'ob-ein-anonymous-p "ob-ein")
+
+;; poly-ein (and polymode) load with the classic view only.  Compile
+;; against polymode for its EIEIO slot names.
+(eval-when-compile (require 'polymode))
+(defvar pm/polymode)
+(defvar poly-ein-mode)
+(declare-function poly-ein-mode "poly-ein")
+(declare-function poly-ein-fontify-buffer "poly-ein")
+(declare-function poly-ein-call-in-base "poly-ein")
+(declare-function pm-select-buffer "polymode-core")
+(declare-function pm-innermost-span "polymode-core")
+(declare-function pm-span-buffer "polymode-core")
 
 (make-obsolete-variable 'ein:use-smartrep nil "0.17.0")
 
@@ -122,7 +136,10 @@ And I don't know if I can on account of the dont-save-cells nonsense."
     (cl-mapcan (lambda (ws)
                  (when-let* ((ws-buf (ein:worksheet-buffer ws)))
                    (with-current-buffer ws-buf
-                     (mapcar #'buffer-name (eieio-oref pm/polymode '-buffers)))))
+                     (mapcar #'buffer-name
+                             (if (bound-and-true-p pm/polymode)
+                                 (eieio-oref pm/polymode '-buffers)
+                               (list ws-buf))))))
                (append (ein:$notebook-worksheets notebook)
                        (ein:$notebook-scratchsheets notebook))))
    (awhen (ein:$notebook-kernel notebook)
@@ -161,8 +178,11 @@ and put last warning in minibuffer."
        (ein:worksheet-focus-cell))
      (unless no-pop*
        (with-current-buffer (ein:notebook-buffer notebook*)
-         (pm-select-buffer (pm-innermost-span))
-         (pop-to-buffer (pm-span-buffer (pm-innermost-span)))))
+         (if (bound-and-true-p pm/polymode)
+             (progn
+               (pm-select-buffer (pm-innermost-span))
+               (pop-to-buffer (pm-span-buffer (pm-innermost-span))))
+           (pop-to-buffer (current-buffer)))))
      ;; Record the kernel in metadata for the next save, but never
      ;; write to the server merely because the notebook was opened.
      (when (null (plist-member (ein:$notebook-metadata notebook*) :kernelspec))
@@ -429,6 +449,13 @@ This is equivalent to do ``C-c`` in the console program."
     (ein:notebook--notification-setup notebook)
     (setq ein:%notebook% notebook)
     (poly-ein-fontify-buffer (current-buffer))))
+
+(defun ein:notebook--view (notebook)
+  "Return NOTEBOOK's `ein:view', making a classic one when none is set."
+  (or (ein:$notebook-view notebook)
+      (setf (ein:$notebook-view notebook)
+            (make-instance 'ein:classic-view
+                           :worksheet (car (ein:$notebook-worksheets notebook))))))
 
 (defun ein:notebook--notification-setup (notebook)
   (ein:notification-setup
@@ -768,7 +795,10 @@ NAME is any non-empty string that does not contain '/' or '\\'.
                (awhen (ein:worksheet-buffer ws)
                  (with-current-buffer it
                    (ein:notebook-avoid-recursion
-                    (mapc (lambda (b) (ignore-errors (kill-buffer b))) (eieio-oref pm/polymode '-buffers))))))
+                    (mapc (lambda (b) (ignore-errors (kill-buffer b)))
+                          (if (bound-and-true-p pm/polymode)
+                              (eieio-oref pm/polymode '-buffers)
+                            (list (current-buffer))))))))
               (t
                (cl-assert (ein:worksheet-p ws))
                (ein:notebook-close notebook))))
@@ -921,6 +951,12 @@ associated with current buffer (if any)."
 
 (defvar ein:notebook-mode-map (make-sparse-keymap))
 
+(defun ein:notebook--call-command (defn)
+  "Call command DEFN interactively, in the polymode base buffer if any."
+  (if (bound-and-true-p poly-ein-mode)
+      (poly-ein-call-in-base (lambda () (call-interactively defn)))
+    (call-interactively defn)))
+
 (defmacro ein:notebook--define-key (keymap key defn)
   "Ideally we could override just the keymap binding with a
 (string . wrapped) cons pair (as opposed to messing with the DEFN
@@ -935,7 +971,7 @@ compilation issue."
          (progn
            (fset (quote ,km) (lambda () ,docstring (interactive)
                                (condition-case-unless-debug err
-                                   (poly-ein-base (call-interactively (function ,defn)))
+                                   (ein:notebook--call-command (function ,defn))
                                  (cl-no-method (message "%s: no applicable method" (quote ,km)))
                                  (error (message "%s: %s" (quote ,km) (error-message-string err))))))
            (define-key ,keymap ,key (quote ,km)))

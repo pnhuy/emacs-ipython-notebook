@@ -41,6 +41,9 @@
                        (remove-hook (quote ,functions) x t)))
          ,functions))
 
+(defvar poly-ein-mode)
+(declare-function poly-ein--syntax-propertize "poly-ein" (pos))
+
 (defun poly-ein--narrow-to-inner (modifier f &rest args)
   (if (or pm-initialization-in-progress (not poly-ein-mode))
       (apply f args)
@@ -228,6 +231,10 @@ This is a bottleneck as we do this on every `pm-get-span'."
              (apply #'move-overlay quail-overlay quail))
 	   (when quail-conv
              (apply #'move-overlay quail-conv-overlay quail-conv)))))))
+
+(defun poly-ein-call-in-base (fn)
+  "Call FN with no arguments in the polymode base buffer."
+  (poly-ein-base (funcall fn)))
 
 (defclass pm-inner-overlay-chunkmode (pm-inner-auto-chunkmode)
   ()

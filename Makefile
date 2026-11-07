@@ -123,10 +123,15 @@ test-compile:
 LINT_FILES = $(wildcard lisp/ein.el lisp/ein-view.el lisp/ein-latex.el lisp/ein-nbview*.el)
 
 .PHONY: lint
+# The new files belong to the ein package (prefix, headers and
+# dependencies come from lisp/ein.el).  EIN's established `ein:' prefix
+# trips package-lint's separator check, which is the only one disabled.
 lint:
 	$(EMACS) -Q --batch \
 	  --eval "(progn (setq package-user-dir (expand-file-name \".deps/elpa\")) (package-initialize))" \
 	  --eval "(require 'package-lint)" -L lisp \
+	  --eval "(setq package-lint-main-file \"lisp/ein.el\")" \
+	  --eval "(advice-add 'package-lint--check-symbol-separators :override #'ignore)" \
 	  -f package-lint-batch-and-exit $(LINT_FILES)
 
 .PHONY: travis-install

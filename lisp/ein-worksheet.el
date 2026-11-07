@@ -34,8 +34,19 @@
 (require 'ein-cell)
 (require 'ein-kill-ring)
 (require 'warnings)
-(require 'poly-ein)
 (require 'seq)
+(require 'ein-view)
+
+;; poly-ein (and polymode) load with the classic view only.  Compile
+;; against polymode for its EIEIO slot names.
+(eval-when-compile (require 'polymode))
+(defvar pm/polymode)
+(defvar pm-allow-post-command-hook)
+(defvar pm-hide-implementation-buffers)
+(declare-function poly-ein--copy-state "poly-ein")
+(declare-function poly-ein-fontify-buffer "poly-ein")
+(declare-function pm-base-buffer "polymode-core")
+(declare-function pm--get-existing-mode "polymode-core")
 
 ;;; Configuration
 
@@ -228,7 +239,7 @@ No one ever said it would be this hard.
 		   (pm-allow-post-command-hook nil))
 	       (setq ein:worksheet-enable-undo nil)
 	       (ein:worksheet-undo-setup ein:%worksheet%)
-	       (when pm/polymode
+	       (when (bound-and-true-p pm/polymode)
 		 (dolist (b (eieio-oref pm/polymode '-buffers))
 		   (when (buffer-live-p b)
 		     (poly-ein--copy-state (ein:worksheet--get-buffer ein:%worksheet%) b))))
@@ -257,7 +268,7 @@ No one ever said it would be this hard.
 Unshift in list parlance means prepending to list."
   (unless old-cell
     (setq old-cell cell))
-  (when buffer-local-enable-undo
+  (when (and buffer-local-enable-undo (not (slot-value cell 'view)))
     (ein:with-live-buffer (ein:cell-buffer cell)
       (if (listp buffer-undo-list)
           (let* ((opl (ein:worksheet--prompt-length old-cell t))
@@ -311,7 +322,7 @@ Unshift in list parlance means prepending to list."
 (defun ein:worksheet--shift-undo-list (cell)
   "Adjust `buffer-undo-list' for deleting CELL.
 Shift in list parlance means removing the front."
-  (when buffer-local-enable-undo
+  (when (and buffer-local-enable-undo (not (slot-value cell 'view)))
     (ein:with-live-buffer (ein:cell-buffer cell)
       (if (listp buffer-undo-list)
           (let* ((pdist (ein:worksheet--prompt-length cell))
@@ -395,6 +406,13 @@ Shift in list parlance means removing the front."
   (ein:kernel-url-or-port (ein:worksheet--kernel ws)))
 
 (cl-defmethod ein:worksheet-buffer ((ws ein:worksheet))
+  (let ((view (ein:worksheet--view ws)))
+    (if view
+        (ein:aand (ein:view-buffer view) (and (buffer-live-p it) it))
+      (ein:worksheet--ewoc-buffer ws))))
+
+(defun ein:worksheet--ewoc-buffer (ws)
+  "Return WS's live ewoc buffer, or nil."
   (ein:and-let* (((slot-boundp ws 'ewoc))
                  (ewoc (ein:worksheet--ewoc ws))
                  (buffer (ewoc-buffer ewoc))
@@ -420,12 +438,13 @@ Shift in list parlance means removing the front."
 
 (cl-defmethod ein:worksheet-set-buffer-name ((ws ein:worksheet))
   (ein:with-live-buffer (ein:worksheet-buffer ws)
-    (dolist (b (or (and pm/polymode (eieio-oref pm/polymode '-buffers))
+    (dolist (b (or (and (bound-and-true-p pm/polymode)
+                        (eieio-oref pm/polymode '-buffers))
                    (list (current-buffer))))
       (ein:with-live-buffer b
         (let* ((base-name (ein:worksheet--buffer-name ws))
                (impl-name
-                (and pm/polymode
+                (and (bound-and-true-p pm/polymode)
                      (not (eq (pm-base-buffer) (current-buffer)))
                      (format "%s%s[%s]" (if pm-hide-implementation-buffers " " "")
                              base-name
@@ -467,6 +486,7 @@ Shift in list parlance means removing the front."
       (remove-hook 'after-change-functions 'ein:worksheet--which-cell-hook t))))
 
 (cl-defmethod ein:worksheet-render ((ws ein:worksheet))
+  (require 'poly-ein)
   (with-current-buffer (ein:worksheet--get-buffer ws)
     (setq ein:%worksheet% ws)
     (ein:worksheet-undo-setup ws)
@@ -572,12 +592,18 @@ worksheet WS is reopened.
          args))
 
 (cl-defmethod ein:worksheet-get-cells ((ws ein:worksheet))
-  (if (ein:worksheet-has-buffer-p ws)
-      (let* ((ewoc (slot-value ws 'ewoc))
-             (nodes (ewoc-collect ewoc
-                                  (lambda (n) (ein:cell-node-p n 'prompt)))))
-        (mapcar #'ein:$node-data nodes))
-    (slot-value ws 'saved-cells)))
+  (cond
+   ((and (ein:worksheet--view ws) (ein:worksheet-has-buffer-p ws))
+    (ein:view-cells (ein:worksheet--view ws)))
+   ((ein:worksheet-has-buffer-p ws)
+    (ein:worksheet--ewoc-cells ws))
+   (t (slot-value ws 'saved-cells))))
+
+(defun ein:worksheet--ewoc-cells (ws)
+  "Return WS's cells in ewoc order."
+  (let* ((ewoc (slot-value ws 'ewoc))
+         (nodes (ewoc-collect ewoc (lambda (n) (ein:cell-node-p n 'prompt)))))
+    (mapcar #'ein:$node-data nodes)))
 
 (cl-defmethod ein:worksheet-ncells ((ws ein:worksheet))
   (length (ein:worksheet-get-cells ws)))

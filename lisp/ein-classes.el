@@ -151,8 +151,9 @@
 `ein:$notebook-last-modified' : string
    Server `last_modified' recorded at open and after each save.
 
-`ein:$notebook-view' : symbol
-   Presentation used for this notebook.
+`ein:$notebook-view' : `ein:view'
+   Presentation of this notebook: an `ein:classic-view' (made lazily
+   by `ein:notebook--view') or an `ein:nbview'.
 "
   url-or-port
   notebook-id ;; In IPython-2.0 this is "[:path]/[:name].ipynb"
@@ -191,7 +192,10 @@
    (kernel :initarg :kernel :type ein:$kernel :accessor ein:worksheet--kernel)
    (dirty :initarg :dirty :type boolean :initform nil :accessor ein:worksheet--dirty-p)
    (metadata :initarg :metadata :initform nil :accessor ein:worksheet--metadata)
-   (events :initarg :events :accessor ein:worksheet--events)))
+   (events :initarg :events :accessor ein:worksheet--events)
+   (view :initarg :view :initform nil :accessor ein:worksheet--view
+         :documentation "The `ein:view' showing this worksheet, or nil when
+the classic ewoc view owns the buffer.")))
 
 ;;; Kernel
 (cl-defstruct ein:$kernelspec
@@ -255,6 +259,9 @@ defined by the server as just ein:$kernel in the client."
    (input :initarg :input :type string
           :documentation "Place to hold data until it is rendered via `ewoc'.")
    (outputs :initarg :outputs :initform nil :type list)
+   (view :initarg :view :initform nil
+         :documentation "The `ein:view' showing this cell, or nil when the
+classic ewoc view (slot `element') renders it.")
    (metadata :initarg :metadata :initform nil :type list :accessor ein:cell-metadata)
    (events :initarg :events :type ein:events)
    (cell-id :initarg :cell-id :initform (ein:utils-uuid) :type string

@@ -42,6 +42,7 @@
 (require 'ein-kernel)
 (require 'ein-output-area)
 (require 'ein-shared-output)
+(require 'ein-view)
 
 (autoload 'mm-encode-buffer "mm-encode")
 (autoload 'mm-possibly-verify-or-decrypt "mm-decode")
@@ -300,7 +301,8 @@ ARGS are initargs; pass `:raw' with the cell as read by
 (cl-defmethod ein:cell-convert ((cell ein:basecell) type)
   (let ((new (ein:cell-from-type type)))
     ;; copy attributes
-    (cl-loop for k in '(read-only ewoc)
+    (cl-loop for k in '(read-only ewoc view)
+      when (slot-boundp cell k)
       do (setf (slot-value new k) (slot-value cell k)))
     ;; copy input
     (setf (slot-value new 'input) (if (ein:cell-active-p cell)
@@ -613,15 +615,27 @@ Return language name as a string or `nil' when not defined.
     ;; 1- for skipping newline
     (when input-node (1- (ewoc-location (ewoc-next ewoc input-node))))))
 
+(defsubst ein:cell--view (cell)
+  "Return the `ein:view' rendering CELL, or nil for a classic ewoc cell."
+  (slot-value cell 'view))
+
 (cl-defmethod ein:cell-get-text ((cell ein:basecell))
   "Grab text in the input area of the cell at point."
-  (if (ein:cell-active-p cell)
+  (cond
+   ((ein:cell--view cell) (ein:view-cell-text (ein:cell--view cell) cell))
+   ((ein:cell-active-p cell)
       (let* ((beg (ein:cell-input-pos-min cell))
              (end (ein:cell-input-pos-max cell)))
-        (buffer-substring beg end))
-    (slot-value cell 'input)))
+        (buffer-substring beg end)))
+   (t (slot-value cell 'input))))
 
 (cl-defmethod ein:cell-set-text ((cell ein:basecell) text)
+  (if (ein:cell--view cell)
+      (ein:view-set-cell-text (ein:cell--view cell) cell text)
+    (ein:cell--ewoc-set-text cell text)))
+
+(defun ein:cell--ewoc-set-text (cell text)
+  "Replace CELL's ewoc input region by TEXT in the current buffer."
   (let* ((input-node (ein:cell-element-get cell :input))
          (ewoc (slot-value cell 'ewoc))
            ;; 1+/1- is for skipping newline
@@ -637,26 +651,35 @@ Return language name as a string or `nil' when not defined.
   (setf (slot-value cell 'input) (ein:cell-get-text cell)))
 
 (cl-defmethod ein:cell-deactivate ((cell ein:basecell))
-  (setf (slot-value cell 'element) nil)
+  (setf (slot-value cell 'element) nil
+        (slot-value cell 'view) nil)
   cell)
 
 (cl-defmethod ein:cell-active-p ((cell ein:basecell))
-  (slot-value cell 'element))
+  (or (slot-value cell 'element) (ein:cell--view cell)))
 
 (cl-defmethod ein:cell-running-set ((cell ein:codecell) running)
-  "FIXME: change the appearance of the cell"
-  (setf (slot-value cell 'running) running))
+  "Set CELL's running flag; a view shows it."
+  (setf (slot-value cell 'running) running)
+  (awhen (ein:cell--view cell)
+    (ein:view-cell-status-changed it cell)))
 
 (cl-defmethod ein:cell-set-collapsed ((cell ein:codecell) collapsed)
   "Set `:collapsed' slot of CELL and invalidate output ewoc nodes."
   (unless (eq (slot-value cell 'collapsed) collapsed)
     (setf (slot-value cell 'collapsed) collapsed)
-    (let ((inhibit-read-only t)
-          (buffer-undo-list t))
-      (apply #'ein:cell--ewoc-invalidate
-             (slot-value cell 'ewoc)
-             (append (ein:cell-element-get cell :output)
-                     (list (ein:cell-element-get cell :footer)))))))
+    (if (ein:cell--view cell)
+        (ein:view-cell-outputs-changed (ein:cell--view cell) cell)
+      (ein:cell--ewoc-set-collapsed cell))))
+
+(defun ein:cell--ewoc-set-collapsed (cell)
+  "Invalidate CELL's output ewoc nodes after a collapse change."
+  (let ((inhibit-read-only t)
+        (buffer-undo-list t))
+    (apply #'ein:cell--ewoc-invalidate
+           (slot-value cell 'ewoc)
+           (append (ein:cell-element-get cell :output)
+                   (list (ein:cell-element-get cell :footer))))))
 
 (cl-defmethod ein:cell-collapse ((cell ein:codecell))
   (ein:cell-set-collapsed cell t))
@@ -676,7 +699,9 @@ Return language name as a string or `nil' when not defined.
 
 (cl-defmethod ein:cell-set-input-prompt ((cell ein:codecell) &optional number)
   (setf (slot-value cell 'input-prompt-number) number)
-  (ein:cell-invalidate-prompt cell))
+  (if (ein:cell--view cell)
+      (ein:view-cell-status-changed (ein:cell--view cell) cell)
+    (ein:cell-invalidate-prompt cell)))
 
 (cl-defmethod ein:cell-goto ((cell ein:basecell) &optional relpos prop)
   "Go to the input area of the given CELL.
@@ -739,7 +764,9 @@ If END is non-`nil', return the location of next element."
 
 (cl-defmethod ein:cell-buffer ((cell ein:basecell))
   "Return a buffer associated by CELL (if any)."
-  (ein:aand (ein:oref-safe cell 'ewoc) (ewoc-buffer it)))
+  (if (ein:cell--view cell)
+      (ein:view-buffer (ein:cell--view cell))
+    (ein:aand (ein:oref-safe cell 'ewoc) (ewoc-buffer it))))
 
 (cl-defmethod ein:cell-clear-output ((cell ein:codecell) stdout stderr other)
   "codecell.js in IPython implements it using timeout and callback.
@@ -748,6 +775,25 @@ If END is non-`nil', return the location of next element."
   (ein:log 'debug "cell-clear-output stdout=%s stderr=%s other=%s"
            stdout stderr other)
   (setf (slot-value cell 'traceback) nil)
+  (if (ein:cell--view cell)
+      (progn
+        (setf (slot-value cell 'outputs)
+              (if (and stdout stderr other)
+                  nil
+                (cl-remove-if
+                 (lambda (o)
+                   (if (equal (plist-get o :output_type) "stream")
+                       (pcase (or (plist-get o :name) (plist-get o :stream))
+                         ("stdout" stdout)
+                         ("stderr" stderr)
+                         (_ other))
+                     other))
+                 (slot-value cell 'outputs))))
+        (ein:view-cell-outputs-changed (ein:cell--view cell) cell))
+    (ein:cell--ewoc-clear-output cell stdout stderr other)))
+
+(defun ein:cell--ewoc-clear-output (cell stdout stderr other)
+  "Delete CELL's STDOUT/STDERR/OTHER output ewoc nodes as selected."
   (let ((ewoc (slot-value cell 'ewoc))
         (output-nodes (ein:cell-element-get cell :output)))
     (if (and stdout stderr other)
@@ -816,6 +862,13 @@ If END is non-`nil', return the location of next element."
   (ein:cell-expand cell)
   (setf (slot-value cell 'outputs)
         (append (slot-value cell 'outputs) (list json)))
+  (if (ein:cell--view cell)
+      (ein:view-cell-outputs-changed (ein:cell--view cell) cell
+                                     (1- (ein:cell-num-outputs cell)))
+    (ein:cell--ewoc-append-output cell json)))
+
+(defun ein:cell--ewoc-append-output (cell json)
+  "Enter an ewoc node for CELL's last output JSON."
   (let* ((ewoc (slot-value cell 'ewoc))
          (index (1- (ein:cell-num-outputs cell)))
          (path `(cell output ,index))

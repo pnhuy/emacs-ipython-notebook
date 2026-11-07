@@ -68,6 +68,10 @@
 
 (load (expand-file-name "test/testein.el" ein:test-init--root) nil t)
 
+;; The legacy suites exercise the classic ewoc view; the nbview tests
+;; bind `ein:notebook-view' to `cells' themselves.
+(setq ein:notebook-view 'classic)
+
 (defun ein:test-init--files ()
   "Return the test files to load."
   (let ((env (getenv "EIN_TEST_FILES")))

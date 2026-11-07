@@ -43,6 +43,17 @@
                          (integer :tag "Local port" 8888)))
   :group 'ein)
 
+(defcustom ein:notebook-view 'cells
+  "How notebooks are presented.
+`cells' is the cell-based view: each cell is a visually separated
+block edited in place, with outputs below it.  `classic' is the
+original ewoc + polymode view, kept as a fallback (deprecated after
+acceptance, not removed).  Takes effect for notebooks opened after
+the change."
+  :type '(choice (const :tag "Cell-based view" cells)
+                 (const :tag "Classic ewoc + polymode view" classic))
+  :group 'ein)
+
 (defcustom ein:log-include-code nil
   "When non-nil, debug logs include the source code sent for execution.
 Off by default: cell source may contain credentials or private data."

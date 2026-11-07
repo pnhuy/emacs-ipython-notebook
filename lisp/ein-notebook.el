@@ -64,6 +64,7 @@
 (declare-function pm-select-buffer "polymode-core")
 (declare-function pm-innermost-span "polymode-core")
 (declare-function pm-span-buffer "polymode-core")
+(declare-function ein:nbview-open "ein-nbview")
 
 (make-obsolete-variable 'ein:use-smartrep nil "0.17.0")
 
@@ -175,7 +176,9 @@ and put last warning in minibuffer."
    (lambda (notebook* created callback* pending-clear* no-pop*)
      (funcall pending-clear*)
      (with-current-buffer (ein:notebook-buffer notebook*)
-       (ein:worksheet-focus-cell))
+       ;; The cells view places point itself when rendering.
+       (unless (and ein:%worksheet% (ein:worksheet--view ein:%worksheet%))
+         (ein:worksheet-focus-cell)))
      (unless no-pop*
        (with-current-buffer (ein:notebook-buffer notebook*)
          (if (bound-and-true-p pm/polymode)
@@ -442,6 +445,28 @@ This is equivalent to do ``C-c`` in the console program."
            (ein:$notebook-events notebook)))
 
 (defun ein:notebook--worksheet-render (notebook ws)
+  "Render WS of NOTEBOOK in the view chosen by `ein:notebook-view'."
+  (if (eq ein:notebook-view 'cells)
+      (ein:notebook--worksheet-render-cells notebook ws)
+    (ein:notebook--worksheet-render-classic notebook ws)))
+
+(defun ein:notebook--worksheet-render-cells (notebook ws)
+  "Render WS of NOTEBOOK in the cells view (`ein:nbview').
+Nothing executes: saved cells are only displayed."
+  (require 'ein-nbview)
+  (let ((buffer (generate-new-buffer (ein:worksheet--buffer-name ws))))
+    (with-current-buffer buffer
+      (let ((view (ein:nbview-open notebook ws buffer)))
+        (setf (ein:$notebook-view notebook) view)
+        (setq ein:%notebook% notebook)
+        (ein:worksheet-bind-events ws)
+        (ein:worksheet-set-kernel ws)
+        (ein:notebook--notification-setup notebook)
+        (set-buffer-modified-p nil)
+        (setq buffer-undo-list nil)))))
+
+(defun ein:notebook--worksheet-render-classic (notebook ws)
+  "Render WS of NOTEBOOK in the classic ewoc view."
   (ein:worksheet-render ws)
   (with-current-buffer (ein:worksheet-buffer ws)
     (poly-ein-mode)

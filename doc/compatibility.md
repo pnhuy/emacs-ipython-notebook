@@ -117,3 +117,65 @@ No allowlist was needed; `ein-markdown-mode.el` was fixed in place.
   0700 the same way (plan Complexity Tracking); behaviour there is `untested`.
 - Inline images require a graphical Emacs. Terminal Emacs shows placeholders.
 - The LaTeX preview uses `latex` plus `dvisvgm` or `dvipng` when present.
+
+## UI review
+
+T091 (SC-004): the cells view (`ein:notebook-view` = `cells`) on
+`smoke.ipynb`. Cell 2 had an execution count, stdout and stderr. Each
+pass selected it, entered the edit state, inserted a cell below,
+moved it up and deleted it. `ein:nbview--check-invariants` held after
+every pass. Emacs 31.1 (PGTK), 2026-11-07.
+
+The GUI screenshots came from `emacs -Q` driven by a script that uses
+`x-export-frames`. The terminal checks ran `emacs -nw -Q` in tmux
+(100×30) and captured the pane with its escape sequences. The
+screenshots are not committed.
+
+| check | modus-operandi | modus-vivendi | default (`emacs -Q`) | tty truecolor | tty 8 colours (`TERM=xterm`) |
+|---|---|---|---|---|---|
+| cell boundaries (bar, header and footer rules) | pass | pass | pass | pass | pass |
+| selected vs unselected | pass | pass | pass | pass | pass |
+| selected vs editing | pass | pass | pass | pass | pass (after fix 2) |
+| source vs output separation | pass | pass | pass | pass | pass |
+| after insert / move / delete | pass (after fix 1) | pass (after fix 1) | pass | pass | not re-checked |
+
+Defects found and fixed during the review:
+
+1. Moving a cell collapsed the selection overlay, which then stayed in
+   the wrong place. `post-command` did not repair it, because the
+   selected cell had not changed. `ein:view-move-cell` now refreshes
+   the overlay. The new assertion is in
+   `ein:nbview-layout-structural-edits`.
+2. The editing bar was weaker than the selected bar: a foreground glyph
+   versus `highlight`'s background block. In 8 colours both drew as
+   green blocks. `ein:nbview-cell-bar-editing` is now an inverse-video
+   `success` block. With fewer than 88 colours it is a bold
+   inverse-video block of the default colours.
+
+Known cosmetic limitation: with point at the very end of a source, the
+cursor is drawn at the start of the footer's row. This happens because
+the footer's `display` string begins with a newline. A `cursor` text
+property on that newline did not change it. Editing is unaffected.
+
+Design deviations from tasks.md T087/T088, all deliberate:
+
+- **Rule.** The header rule is a string of `─` characters (`-` when
+  `─` cannot be displayed). It is not a `(space :align-to
+  right-margin)` stretch, because a stretch glyph cannot carry the
+  rule face in a terminal.
+- **Decoration mechanism.** Cell decorations are text properties: a
+  `line-prefix` and `wrap-prefix` bar, plus `ein:nbview-code-face` via
+  `add-face-text-property`. They are applied by jit-lock or by
+  re-decorating one cell. There are no per-cell overlays; a single
+  overlay (`ein-nbview-selection`) marks the selection.
+- **Footer stickiness.** The footer character keeps the default
+  stickiness rather than `front-sticky nil`. Text inserted after it
+  then inherits `read-only`, so nothing can be typed between cells.
+  The header is `front-sticky t` and `rear-nonsticky t`.
+- **Typing re-renders.** The T082 typing check allows at most one
+  re-render, not exactly one. Ordinary typing re-renders nothing.
+- **Mode.** `ein:notebook-mode` is not enabled in a cells buffer.
+  `ein:nbview-mode-map` carries the essential bindings. The full
+  keymap is US6.
+- **Two windows.** Selection is per buffer. With the buffer shown in
+  two windows, the selection follows the window of the last command.

@@ -226,10 +226,7 @@
       (should (equal (concat s0 "A") (ein:view-cell-text view code)))
       (ein:testing-undo-command #'ein:nbview-undo)
       (should (equal s0 (ein:view-cell-text view code)))
-      (should (string-match-p "late" (get-text-property
-                                      (ein:nbview--footer-pos
-                                       (ein:nbview--header-pos view code))
-                                      'display)))
+      (should (string-match-p "late" (ein:nbview--footer-rendered view code)))
       (should (ein:nbview--check-invariants)))))
 
 ;; (e)
@@ -258,10 +255,7 @@
       (ein:testing-undo-command #'ein:nbview-undo)
       (should (eq code (cadr (ein:view-cells view))))
       (should (string-match-p "while deleted"
-                              (get-text-property
-                               (ein:nbview--footer-pos
-                                (ein:nbview--header-pos view code))
-                               'display)))
+                              (ein:nbview--footer-rendered view code)))
       (should (string-match-p "while deleted" (ein:testing-undo-json))))))
 
 ;; (g)

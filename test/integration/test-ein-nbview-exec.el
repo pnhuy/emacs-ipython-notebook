@@ -66,9 +66,7 @@
                   (should (ein:testing-wait-until
                            (lambda ()
                              (string-match-p
-                              "/" (get-text-property (ein:nbview--footer-pos
-                                                      (ein:nbview--header-pos view cell))
-                                                     'display)))
+                              "/" (or (ein:nbview--footer-rendered view cell) "")))
                            20)))
                 (should (ein:nbview--check-invariants))
                 (setq buffer-source (ein:view-cell-text view cell))))

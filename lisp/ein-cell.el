@@ -287,10 +287,11 @@ ARGS are initargs; pass `:raw' with the cell as read by
     (aif (plist-get data :execution_count)
         (ein:oset-if-empty cell 'input-prompt-number it)))
   (ein:oset-if-empty cell 'collapsed
-                     (let ((v (or (plist-get data :collapsed)
-                                  (plist-get (slot-value cell 'metadata)
-                                             :collapsed))))
-                       (if (eql v json-false) nil v)))
+                     (let ((v (plist-get data :collapsed)))
+                       (if (and v (not (eql v json-false)))
+                           v
+                         (ein:cell--metadata-outputs-hidden
+                          (slot-value cell 'metadata)))))
   cell)
 
 (cl-defmethod ein:cell-init ((cell ein:textcell) data)
@@ -1020,19 +1021,34 @@ Called from ewoc pretty printer via `ein:cell-insert-output'."
   (cl-loop for (k v) on plist by #'cddr
            unless (memq k keys) nconc (list k v)))
 
+(defun ein:cell--metadata-outputs-hidden (metadata)
+  "Non-nil when the cell METADATA marks the outputs hidden.
+`jupyter.outputs_hidden' (nbformat 4.x) wins over the legacy
+`collapsed'."
+  (let* ((metadata (and (listp metadata) metadata))
+         (jupyter (plist-get metadata :jupyter))
+         (jupyter (and (listp jupyter) jupyter))
+         (v (if (plist-member jupyter :outputs_hidden)
+                (plist-get jupyter :outputs_hidden)
+              (plist-get metadata :collapsed))))
+    (and v (not (memq v (list json-false :null))))))
+
 (defun ein:cell--metadata-to-json (cell)
   "Return CELL metadata for saving: as read unless changed (G3, G4)."
   (let* ((raw-metadata (plist-get (slot-value cell 'raw) :metadata))
          (metadata (copy-tree (slot-value cell 'metadata))))
     (when (slot-exists-p cell 'collapsed)
-      (let* ((v (plist-get (ein:json-nilify raw-metadata) :collapsed))
-             (was (and v (not (eq v json-false))))
+      (let* ((was (ein:cell--metadata-outputs-hidden raw-metadata))
              (now (slot-value cell 'collapsed)))
         (unless (eq (not was) (not now))
-          (setq metadata (plist-put metadata :collapsed (if now t json-false)))
-          (when (plist-member (plist-get metadata :jupyter) :outputs_hidden)
+          (unless (listp metadata) (setq metadata nil))
+          ;; nbformat 4.x: `jupyter.outputs_hidden'.  The legacy
+          ;; `collapsed' key is updated only when the file has it.
+          (when (and (listp raw-metadata) (plist-member raw-metadata :collapsed))
+            (setq metadata (plist-put metadata :collapsed (if now t json-false))))
+          (let ((jupyter (plist-get metadata :jupyter)))
             (setq metadata (plist-put metadata :jupyter
-                                      (plist-put (plist-get metadata :jupyter)
+                                      (plist-put (and (listp jupyter) (copy-sequence jupyter))
                                                  :outputs_hidden (if now t json-false))))))))
     (ein:json-prefer-raw metadata raw-metadata)))
 
@@ -1133,10 +1149,65 @@ a plist."
                           (list :cell cell :text text))
       (ein:events-trigger events 'maybe_reset_undo.Worksheet cell))))
 
+(defvar ein:cell--display-outputs (make-hash-table :test #'eq :weakness 'key)
+  "Cell -> alist of (OUTPUT . DISPLAY-ID) of its outputs that have an id.
+`update_display_data' replaces the outputs with its display id, in
+every cell.")
+
+(defun ein:cell--display-id (content)
+  "The display id of the message CONTENT, or nil."
+  (let ((transient (plist-get content :transient)))
+    (and (listp transient) (plist-get transient :display_id))))
+
+(defun ein:cell--update-display (content)
+  "Replace the outputs whose display id is that of CONTENT's.
+Return non-nil when an output was replaced."
+  (let ((id (ein:cell--display-id content))
+        changed)
+    (when id
+      (maphash
+       (lambda (cell records)
+         (when (rassoc id records)
+           (let (new-records replaced)
+             (setf (slot-value cell 'outputs)
+                   (mapcar (lambda (o)
+                             (let ((r (assq o records)))
+                               (cond
+                                ((equal (cdr r) id)
+                                 (let ((json (list :output_type (plist-get o :output_type))))
+                                   (when (plist-member o :execution_count)
+                                     (setq json (plist-put json :execution_count
+                                                           (plist-get o :execution_count))))
+                                   (setq json (plist-put json :data (plist-get content :data)))
+                                   (setq json (plist-put json :metadata
+                                                         (or (plist-get content :metadata)
+                                                             (make-hash-table))))
+                                   (push (cons json id) new-records)
+                                   (setq replaced t)
+                                   json))
+                                (r (push r new-records) o)
+                                (t o))))
+                           (slot-value cell 'outputs)))
+             (puthash cell new-records ein:cell--display-outputs)
+             (when replaced
+               (setq changed t)
+               (when (ein:cell--view cell)
+                 (ein:view-cell-outputs-changed (ein:cell--view cell) cell))))))
+       ein:cell--display-outputs))
+    changed))
+
 (cl-defmethod ein:cell--handle-output ((cell ein:codecell) msg-type content _metadata)
   (ein:log 'debug "ein:cell--handle-output (cell ein:codecell): %s" msg-type)
-  (when-let* ((json `(:output_type ,msg-type))
-             (live-p (buffer-live-p (ein:cell-buffer cell))))
+  (when (equal msg-type "update_display_data")
+    ;; Not an output of CELL: it updates earlier displays, anywhere.
+    (ein:cell--update-display content)
+    (setq msg-type nil))
+  (when-let* ((msg-type)
+              (json `(:output_type ,msg-type))
+              (live-p (buffer-live-p (ein:cell-buffer cell))))
+    (when (slot-value cell 'clear-pending)
+      (setf (slot-value cell 'clear-pending) nil)
+      (ein:cell-clear-output cell t t t))
     (cl-macrolet ((copy-props
                    (src tgt props)
                    `(mapc (lambda (kw)
@@ -1159,12 +1230,21 @@ a plist."
          (setq json nil))))
     (when json
       (ein:cell-append-output cell json)
+      (when-let* ((id (ein:cell--display-id content))
+                  (out (car (last (slot-value cell 'outputs)))))
+        (when (eq out json)
+          (push (cons json id) (gethash cell ein:cell--display-outputs))))
       (ein:events-trigger (slot-value cell 'events) 'maybe_reset_undo.Worksheet cell))))
 
-(cl-defmethod ein:cell--handle-clear-output ((cell ein:codecell) _content _metadata)
-  "Spec 5.0 no longer has stdout fields for clear_output."
+(cl-defmethod ein:cell--handle-clear-output ((cell ein:codecell) content _metadata)
+  "Clear CELL's outputs; with `wait', when the next output arrives.
+Spec 5.0 no longer has stdout fields for clear_output."
   (when (buffer-live-p (ein:cell-buffer cell))
-    (ein:cell-clear-output cell t t t)
+    (let ((wait (plist-get content :wait)))
+      (if (and wait (not (eq wait json-false)) (not (eq wait :json-false)))
+          (setf (slot-value cell 'clear-pending) t)
+        (setf (slot-value cell 'clear-pending) nil)
+        (ein:cell-clear-output cell t t t)))
     (ein:events-trigger (slot-value cell 'events) 'maybe_reset_undo.Worksheet cell)))
 
 (cl-defmethod ein:cell-has-image-output-p ((cell ein:codecell))

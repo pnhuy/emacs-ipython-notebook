@@ -239,7 +239,7 @@ where `created' indicates a new notebook or an existing one."
                                            (remhash pending-key*
                                                     *ein:notebook--pending-query*))
                                          pending-key))
-         (existing (ein:notebook-get-opened-notebook url-or-port path))
+         (existing (ein:notebook--live-opened-notebook url-or-port path))
          (notebook (aif existing it
                      (ein:notebook-new url-or-port path kernelspec)))
          (callback0 (ein:notebook-open--decorate-callback notebook existing pending-clear
@@ -911,6 +911,17 @@ worksheet to save result."
 
 (defun ein:notebook-get-opened-notebook (url-or-port path)
   (gethash (list url-or-port path) ein:notebook--opened-map))
+
+(defun ein:notebook--live-opened-notebook (url-or-port path)
+  "The opened notebook of URL-OR-PORT and PATH whose buffer is live.
+A notebook whose buffer was killed without going through
+`ein:notebook-close' is forgotten, so that opening it again reads it
+from the server instead of reusing a notebook with no buffer."
+  (when-let* ((notebook (ein:notebook-get-opened-notebook url-or-port path)))
+    (if (buffer-live-p (ein:notebook-buffer notebook))
+        notebook
+      (ein:notebook-remove-opened-notebook notebook)
+      nil)))
 
 (defun ein:notebook-put-opened-notebook (notebook)
   (puthash (list (ein:$notebook-url-or-port notebook)

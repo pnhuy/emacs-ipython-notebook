@@ -238,8 +238,7 @@
       (let ((h (ein:nbview--header-pos view code)))
         (should (string-match-p "\\[7\\]" (get-text-property h 'display)))
         (should (string-match-p "hello"
-                                (get-text-property (ein:nbview--footer-pos h)
-                                                   'display)))))))
+                                (ein:nbview--footer-rendered view code)))))))
 
 (provide 'test-ein-nbview-layout)
 ;;; test-ein-nbview-layout.el ends here

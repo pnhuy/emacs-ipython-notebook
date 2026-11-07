@@ -386,3 +386,61 @@ Notes:
 - `C-c C-v` (`ein:nbview-toggle-markdown-preview`) turns the preview
   off in one buffer; `ein:nbview-markdown-preview` turns it off
   everywhere.
+
+## Outputs
+
+T149 (quickstart §6 step 5, SC-007, FR-031–FR-036): the cells view on a
+notebook that nbconvert executed. It holds a matplotlib PNG, an HTML
+table with an embedded `<script>`, an SVG with `<script>` and `onload`,
+a LaTeX result, a `ZeroDivisionError` traceback, and a 5000-line stream.
+Emacs 31.1, matplotlib 3.11.2, 2026-11-07. The GUI and terminal setup
+match the Markdown review: Xvfb with `x-export-frames`, and tmux at
+100×45. The screenshots are not committed. The integration test
+`ein:integration-nbview-rich-outputs` runs the same kinds of output
+against a live kernel, then saves, validates with nbformat, and reopens
+the notebook.
+
+| check | GUI | terminal |
+|---|---|---|
+| output shown under its own cell, with the cell bar on every line | pass | pass (`▎`) |
+| matplotlib PNG | pass (inline, scaled to `ein:nbview-image-max-width`) | pass (`<Figure size …>` text) |
+| HTML table | pass (shr, "42" shown, script dropped) | pass |
+| SVG | pass (inline; no `script` or `onload` in the image data) | pass (text representation) |
+| LaTeX | pass (SVG image) | pass (Unicode text) |
+| traceback readable (`ename: evalue` header, ANSI colours) | pass | pass |
+| long stream truncated to 200 lines; expand shows all 5002 | pass | pass |
+| `o` collapses to `[outputs hidden]` and back | pass | pass |
+| point at the end of the source is drawn on the source line | pass | pass |
+| model outputs unchanged; invariants hold; output adds no undo entries | pass | pass |
+| outputs survive save and reopen | pass (integration test) | pass (integration test) |
+
+Defects found and fixed during the review:
+
+1. The first output line of the last cell was drawn without the cell
+   bar. A line that starts in an `after-string` takes its `line-prefix`
+   from the following buffer text, and that text is the next cell or
+   nothing at all. The footer is now a `before-string` on the footer
+   newline, written as `" \n"` plus the body. Every line starts inside
+   the string. The leading space carries the `cursor` property, so
+   point at the end of the source is still drawn on that line. Test:
+   `ein:nbview-output-footer-lines-own-prefix`.
+2. Reopening a notebook after its buffer was killed failed with
+   `set-buffer nil`, because the stale opened-notebook entry was reused.
+   `ein:notebook-open` now ignores and forgets entries whose buffer is
+   dead. Test: `ein:notebook-live-opened-notebook-forgets-killed-buffer`.
+
+Notes:
+
+- `ein:output-area-inlined-images` (classic view) now defaults to `t`
+  (T148). The cells view always shows images inline in graphic frames.
+- Terminal frames prefer text representations, which is why figures
+  and SVGs show as their `text/plain` form there.
+- Scripts, event handlers and external references are removed from HTML
+  and SVG before rendering. Nothing is fetched over the network.
+- The error header repeats the last traceback line. This follows
+  contracts/renderers.md, so the header stays visible when the
+  traceback is truncated.
+- Output rendering never touches the buffer text or the undo list.
+- `ein:latex-cache-directory` defaults to a directory under
+  `user-emacs-directory`. An `emacs -Q` review run therefore writes its
+  cache to `~/.emacs.d/ein/latex-cache/`.

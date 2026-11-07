@@ -36,8 +36,10 @@
 Unless it's a single line \"<IPython.core.display.HTML object>\" or
 \"TemporalData[TimeSeries, <<1>>]\" in which case prefer :text/html.")
 
-(defcustom ein:output-area-inlined-images nil
-  "Turn on to insert images into buffer.  Default spawns external viewer."
+(defcustom ein:output-area-inlined-images t
+  "Non-nil inserts images into the notebook buffer.
+Nil spawns an external viewer instead.  Only the classic view uses
+this; the cells view always shows images inline in graphic frames."
   :type 'boolean
   :group 'ein)
 

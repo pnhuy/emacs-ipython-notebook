@@ -333,6 +333,21 @@ error (never return a partial string) when OBJ cannot be encoded."
                    properties))
     (comint-carriage-motion start (point))))
 
+(declare-function comint-carriage-motion "comint")
+
+(defun ein:output-apply-carriage-returns (string)
+  "Return STRING as a terminal shows it.
+A carriage return that does not end a line overwrites from the line
+start, as progress bars expect; backspaces are applied too.  Text
+properties are kept."
+  (if (not (string-match-p "[\r\b]" string))
+      string
+    (require 'comint)
+    (with-temp-buffer
+      (insert string)
+      (comint-carriage-motion (point-min) (point-max))
+      (buffer-string))))
+
 (defun ein:maybe-truncate-string-lines (string nlines)
   "Truncate multi-line `string' to NLINES."
   (if nlines

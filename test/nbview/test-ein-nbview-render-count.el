@@ -113,10 +113,7 @@
                 (should (= 1 (ein:testing-render-count 'ein:nbview--render-footer)))
                 (should (= 0 (ein:testing-render-count 'ein:nbview--render-cell)))
                 (should (string-match-p
-                         "x\n" (get-text-property
-                                (ein:nbview--footer-pos
-                                 (ein:nbview--header-pos view cell))
-                                'display)))))))
+                         "x\n" (ein:nbview--footer-rendered view cell)))))))
       (delete-file file))))
 
 (provide 'test-ein-nbview-render-count)

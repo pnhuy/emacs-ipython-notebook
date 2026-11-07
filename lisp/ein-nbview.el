@@ -56,6 +56,7 @@
 (require 'ein-cell)
 (require 'ein-nbview-edit)
 (require 'ein-nbview-markdown)
+(require 'ein-nbview-output)
 (require 'ein-completer)
 
 (declare-function ein:kernel-when-ready "ein-kernel")
@@ -170,6 +171,9 @@
 (defvar-local ein:nbview--editing nil
   "Non-nil while the selected cell is in edit state.")
 
+(defvar-local ein:nbview--bar-cell nil
+  "The cell whose output string shows the selection bar.")
+
 (defun ein:nbview--current-view ()
   "Return the current buffer's `ein:nbview', or signal a `user-error'."
   (or ein:nbview--view (user-error "Not in a notebook cells view")))
@@ -220,46 +224,51 @@
         ((null value) "")
         (t (format "%s" value))))
 
-(defun ein:nbview--output-text (output)
-  "Return OUTPUT (an nbformat output plist) as propertized plain text."
-  (let ((type (plist-get output :output_type)))
-    (pcase type
-      ("stream"
-       (propertize (ansi-color-filter-apply
-                    (ein:nbview--string (plist-get output :text)))
-                   'face (if (equal (or (plist-get output :name)
-                                        (plist-get output :stream))
-                                    "stderr")
-                             'ein:nbview-stderr-face
-                           'ein:nbview-output-face)))
-      ((or "error" "pyerr")
-       (propertize (ansi-color-filter-apply
-                    (mapconcat #'identity
-                               (append (plist-get output :traceback) nil)
-                               "\n"))
-                   'face 'ein:nbview-error-face))
-      (_
-       (let* ((data (or (plist-get output :data) output))
-              (image (cl-find-if (lambda (k) (plist-get data k))
-                                 '(:image/png :image/jpeg :image/svg+xml)))
-              (text (plist-get data :text/plain)))
-         (propertize (cond (image (format "[%s]" (substring (symbol-name image) 1)))
-                           (text (ein:nbview--string text))
-                           (t (format "[%s output]" type)))
-                     'face 'ein:nbview-output-face))))))
+(defvar-local ein:nbview--expanded-outputs nil
+  "Weak hash table of the cells whose outputs are shown untruncated.")
 
-(defun ein:nbview--footer-display (cell)
-  "Return the `display' string of CELL's footer: outputs, then a rule."
+(defun ein:nbview--outputs-expanded-p (cell)
+  "Non-nil when CELL's outputs are shown untruncated."
+  (and ein:nbview--expanded-outputs
+       (gethash cell ein:nbview--expanded-outputs)))
+
+(defun ein:nbview--set-outputs-expanded (view cell flag)
+  "Show CELL's outputs in VIEW untruncated when FLAG is non-nil."
+  (with-current-buffer (oref view buffer)
+    (unless ein:nbview--expanded-outputs
+      (setq ein:nbview--expanded-outputs
+            (make-hash-table :test #'eq :weakness 'key)))
+    (if flag
+        (puthash cell t ein:nbview--expanded-outputs)
+      (remhash cell ein:nbview--expanded-outputs))
+    (ein:nbview--render-footer view cell)))
+
+(defun ein:nbview--output-context (view cell)
+  "Rendering context of CELL's outputs in VIEW (see `ein:nbview-render-output')."
+  (let ((window (get-buffer-window (oref view buffer) t)))
+    (list :graphic (display-graphic-p (and window (window-frame window)))
+          :window-width (if window (window-body-width window t) 800)
+          :window-cols (if window (window-body-width window) 80)
+          :notebook-dir (ein:nbview--notebook-directory)
+          :cell cell
+          :on-update (lambda ()
+                       (when (buffer-live-p (oref view buffer))
+                         (ein:nbview--render-footer view cell))))))
+
+(defun ein:nbview--footer-body (view cell)
+  "Return what VIEW shows below CELL's source: its outputs, then a rule."
   (let ((outputs (and (ein:codecell-p cell) (ein:oref-safe cell 'outputs))))
     (concat
-     "\n"
      (cond ((null outputs) "")
            ((ein:oref-safe cell 'collapsed)
             (propertize "[outputs hidden]\n" 'face 'ein:nbview-prompt))
-           (t (mapconcat (lambda (o)
-                           (let ((s (ein:nbview--output-text o)))
-                             (if (string-suffix-p "\n" s) s (concat s "\n"))))
-                         outputs "")))
+           (t (let ((s (ein:nbview-render-outputs
+                        outputs (ein:nbview--output-context view cell))))
+                (if (ein:nbview--outputs-expanded-p cell)
+                    s
+                  (ein:nbview-output-truncate
+                   s ein:nbview-output-max-lines
+                   (lambda () (ein:nbview--set-outputs-expanded view cell t)))))))
      (ein:nbview--rule) "\n")))
 
 (defun ein:nbview--header-string (cell)
@@ -270,10 +279,11 @@
               'display (ein:nbview--header-display cell)))
 
 (defun ein:nbview--footer-string (cell)
-  "Return CELL's footer character."
+  "Return CELL's footer character.
+What shows below the source is the `before-string' of an overlay on it
+\(see `ein:nbview--render-footer')."
   (propertize "\n" 'read-only t 'cursor-intangible t
-              'ein-nbview-cell cell 'ein-nbview-part 'footer
-              'display (ein:nbview--footer-display cell)))
+              'ein-nbview-cell cell 'ein-nbview-part 'footer))
 
 (defun ein:nbview--placeholder-string ()
   "Return the empty-notebook placeholder character."
@@ -400,7 +410,8 @@ Return t otherwise.  VIEW defaults to the current buffer's view."
       (insert (ein:nbview--header-string cell)
               (or (ein:oref-safe cell 'input) "")
               (ein:nbview--footer-string cell)))
-    (puthash cell (copy-marker pos) (oref view markers))))
+    (puthash cell (copy-marker pos) (oref view markers))
+    (ein:nbview--render-footer view cell)))
 
 (defun ein:nbview--set-part-display (view cell part display)
   "Set PART (header or footer) of CELL to DISPLAY, silently.
@@ -415,9 +426,61 @@ Do nothing when CELL is not in the buffer."
   "Re-render CELL's header (prompt, status) in VIEW."
   (ein:nbview--set-part-display view cell 'header (ein:nbview--header-display cell)))
 
+(defun ein:nbview--footer-overlay (view cell &optional create)
+  "Return the overlay showing CELL's outputs in VIEW.
+CREATE non-nil makes it when missing.  Nil when CELL is not shown."
+  (with-current-buffer (oref view buffer)
+    (when-let* ((h (ein:nbview--header-pos view cell))
+                (f (ein:nbview--footer-pos h)))
+      (or (cl-find-if (lambda (o) (eq (overlay-get o 'ein-nbview-footer) cell))
+                      (overlays-at f))
+          (and create
+               ;; Front-advance: text typed at the end of the source
+               ;; stays out of it.  It evaporates with the footer.
+               (let ((ov (make-overlay f (1+ f) nil t nil)))
+                 (overlay-put ov 'ein-nbview-footer cell)
+                 (overlay-put ov 'evaporate t)
+                 ov))))))
+
+(defun ein:nbview--apply-footer-bar (view cell ov)
+  "Set OV's `before-string' to CELL's footer body with its left bar.
+The string starts with the newline that ends the source's last line and
+leaves out the body's final newline, which the footer character
+supplies.  So every line of it starts inside the string and takes its
+`line-prefix': a line starting in the buffer would take the prefix of
+the text after the footer (the next cell, or none at the end).  A
+leading space with a `cursor' property keeps point at the footer drawn
+at the end of the source instead of after the outputs (a newline gets
+no cursor glyph)."
+  (let* ((face (if (eq cell (oref view selected))
+                   (ein:nbview--selection-face)
+                 'ein:nbview-cell-bar))
+         (bar (ein:nbview--bar face))
+         (body (or (overlay-get ov 'ein-nbview-body) ""))
+         (s (concat " \n" (string-remove-suffix "\n" body))))
+    (add-text-properties 0 (length s)
+                         (list 'line-prefix bar 'wrap-prefix bar
+                               'ein-nbview-cell cell)
+                         s)
+    (put-text-property 0 1 'cursor t s)
+    (overlay-put ov 'before-string s)))
+
 (defun ein:nbview--render-footer (view cell)
-  "Re-render CELL's footer (outputs) in VIEW."
-  (ein:nbview--set-part-display view cell 'footer (ein:nbview--footer-display cell)))
+  "Re-render CELL's footer (outputs, bottom rule) in VIEW.
+Outputs are an overlay string: Emacs ignores image `display' properties
+nested in a `display' string, and overlays never touch the undo list.
+See `ein:nbview--apply-footer-bar' for its shape."
+  (with-current-buffer (oref view buffer)
+    (when-let* ((ov (ein:nbview--footer-overlay view cell t)))
+      (overlay-put ov 'ein-nbview-body (ein:nbview--footer-body view cell))
+      (ein:nbview--apply-footer-bar view cell ov))))
+
+(defun ein:nbview--footer-rendered (view cell)
+  "The string VIEW shows below CELL's source, or nil.
+It is the footer body, as `ein:nbview--footer-body' returns it."
+  (when-let* ((ov (ein:nbview--footer-overlay view cell))
+              (s (overlay-get ov 'before-string)))
+    (concat (substring s 2) "\n")))
 
 (defun ein:nbview--remove-placeholder ()
   "Delete the empty-notebook placeholder, if any."
@@ -495,7 +558,13 @@ Do nothing when CELL is not in the buffer."
         (overlay-put ov 'wrap-prefix bar))
       (if f
           (move-overlay ov h (1+ f))
-        (move-overlay ov (point-min) (point-min))))))
+        (move-overlay ov (point-min) (point-min)))
+      ;; The output strings carry their own bar.
+      (let ((prev ein:nbview--bar-cell))
+        (setq ein:nbview--bar-cell cell)
+        (dolist (c (delete-dups (delq nil (list prev cell))))
+          (when-let* ((fov (ein:nbview--footer-overlay view c)))
+            (ein:nbview--apply-footer-bar view c fov)))))))
 
 (defun ein:nbview-set-editing (flag)
   "Show the selected cell as being edited when FLAG is non-nil."
@@ -667,11 +736,59 @@ edit state.  A renderer error shows the source in
         (ein:nbview--refresh-preview view cell))
     (setf (slot-value cell 'input) text)))
 
+(defcustom ein:nbview-output-coalesce-delay 0.05
+  "Seconds during which further output changes of a cell are batched.
+The first change renders at once; later ones within the delay render
+once when it expires."
+  :type 'number
+  :package-version '(ein . "0.18")
+  :group 'ein-nbview)
+
+(defvar-local ein:nbview--output-timers nil
+  "Hash table: cell -> (TIMER . PENDING) of its coalescing window.")
+
+(defun ein:nbview--output-timer-fired (view cell)
+  "End CELL's coalescing window in VIEW; render if changes are pending.
+A trailing render opens a new window, so a steady stream renders at
+most once per `ein:nbview-output-coalesce-delay'."
+  (when-let* ((buffer (ein:view-buffer view)))
+    (with-current-buffer buffer
+      (when-let* ((timers ein:nbview--output-timers)
+                  (entry (gethash cell timers)))
+        (remhash cell timers)
+        (when (cdr entry)
+          (puthash cell (cons (run-with-timer ein:nbview-output-coalesce-delay nil
+                                              #'ein:nbview--output-timer-fired view cell)
+                              nil)
+                   timers)
+          (condition-case err
+              (ein:nbview--render-footer view cell)
+            (error (ein:log 'warn "ein:nbview output render: %s"
+                            (error-message-string err)))))))))
+
+(defun ein:nbview--cancel-output-timers ()
+  "Cancel the coalescing timers of the current buffer."
+  (when ein:nbview--output-timers
+    (maphash (lambda (_cell entry) (cancel-timer (car entry)))
+             ein:nbview--output-timers)
+    (clrhash ein:nbview--output-timers)))
+
 (cl-defmethod ein:view-cell-outputs-changed ((view ein:nbview) cell &optional _index)
-  "Re-render CELL's footer.  Never signals (process filters call it)."
+  "Re-render CELL's footer, coalescing bursts of changes.
+Never signals (process filters call it)."
   (condition-case err
-      (when (buffer-live-p (oref view buffer))
-        (ein:nbview--render-footer view cell))
+      (when-let* ((buffer (ein:view-buffer view)))
+        (with-current-buffer buffer
+          (let ((timers (or ein:nbview--output-timers
+                            (setq ein:nbview--output-timers
+                                  (make-hash-table :test #'eq)))))
+            (if-let* ((entry (gethash cell timers)))
+                (setcdr entry t)
+              (puthash cell (cons (run-with-timer ein:nbview-output-coalesce-delay nil
+                                                  #'ein:nbview--output-timer-fired view cell)
+                                  nil)
+                       timers)
+              (ein:nbview--render-footer view cell)))))
     (error (ein:log 'warn "ein:view-cell-outputs-changed: %s"
                     (error-message-string err)))))
 
@@ -731,7 +848,10 @@ edit state.  A renderer error shows the source in
             (ein:nbview--scan view)))
         (when offset
           (goto-char (+ (ein:nbview--header-pos view cell) offset)))
-        ;; Reinsertion collapsed the overlay if it covered the lower cell.
+        ;; Reinsertion collapsed the overlay if it covered the lower cell,
+        ;; and the lower cell's output overlay evaporated.
+        (ein:nbview--render-footer view cell)
+        (ein:nbview--render-footer view other)
         (ein:nbview--update-selection-overlay view)
         (ein:nbview--refresh-preview view cell)
         (ein:nbview--refresh-preview view other)
@@ -937,6 +1057,8 @@ One undo step reverts the split."
       (insert (ein:nbview--footer-string cell) (ein:nbview--header-string new)))
     (ein:nbview--scan view)
     (ein:nbview--set-dirty view)
+    (ein:nbview--render-footer view cell)
+    (ein:nbview--render-footer view new)
     (ein:nbview--decorate-cell view cell)
     (ein:nbview--goto-source view new)
     new))
@@ -973,6 +1095,7 @@ joined by a newline.  One undo step reverts the merge."
                                           '(face))))
       (ein:nbview--scan view)
       (ein:nbview--set-dirty view)
+      (ein:nbview--render-footer view upper)
       (ein:nbview--decorate-cell view upper)
       (goto-char (+ (car ub) (or offset (- (cdr ub) (car ub)))))
       (setf (oref view selected) nil)
@@ -994,6 +1117,86 @@ In edit state, leave it (see `ein:nbview-modal')."
        (lambda (_kernel)
          (ein:cell-execute cell)
          (ein:nbview--set-dirty view))))))
+
+;;; Output and input visibility
+
+(defun ein:nbview--code-cell-or-error ()
+  "Return the code cell at point or signal a `user-error'."
+  (let ((cell (ein:nbview--cell-or-error)))
+    (unless (ein:codecell-p cell) (user-error "Not a code cell"))
+    cell))
+
+(defun ein:nbview-toggle-output ()
+  "Hide or show the outputs of the current code cell.
+Saved as `metadata.jupyter.outputs_hidden'."
+  (interactive)
+  (let ((view (ein:nbview--current-view))
+        (cell (ein:nbview--code-cell-or-error)))
+    (ein:cell-set-collapsed cell (not (slot-value cell 'collapsed)))
+    (ein:nbview--render-footer view cell)
+    (ein:nbview--set-dirty view)))
+
+(defun ein:nbview-toggle-output-truncation ()
+  "Show all outputs of the current cell, or truncate them again.
+See `ein:nbview-output-max-lines'."
+  (interactive)
+  (let ((view (ein:nbview--current-view))
+        (cell (ein:nbview--cell-or-error)))
+    (ein:nbview--set-outputs-expanded
+     view cell (not (ein:nbview--outputs-expanded-p cell)))))
+
+(defun ein:nbview--input-overlay (view cell)
+  "The overlay hiding CELL's source in VIEW, or nil."
+  (when-let* ((b (ein:nbview--source-bounds view cell)))
+    (cl-find-if (lambda (o) (eq (overlay-get o 'ein-nbview-input-hidden) cell))
+                (overlays-in (car b) (cdr b)))))
+
+(defun ein:nbview--show-input (view cell)
+  "Show CELL's source in VIEW if it is hidden."
+  (when-let* ((ov (ein:nbview--input-overlay view cell)))
+    (delete-overlay ov)))
+
+(defun ein:nbview-toggle-input ()
+  "Hide or show the source of the current cell (display only).
+Editing the cell shows its source again."
+  (interactive)
+  (let* ((view (ein:nbview--current-view))
+         (cell (ein:nbview--cell-or-error))
+         (b (ein:nbview--source-bounds view cell)))
+    (if (ein:nbview--input-overlay view cell)
+        (ein:nbview--show-input view cell)
+      (when (< (car b) (cdr b))
+        (let ((ov (make-overlay (car b) (cdr b))))
+          (overlay-put ov 'ein-nbview-input-hidden cell)
+          (overlay-put ov 'evaporate t)
+          (overlay-put ov 'invisible t)
+          (overlay-put ov 'before-string
+                       (propertize "[source hidden]" 'face 'ein:nbview-prompt)))))))
+
+(defun ein:nbview--input-enter-edit ()
+  "`ein:nbview-enter-edit-hook' function: show the edited cell's source."
+  (when-let* ((view ein:nbview--view)
+              (cell ein:nbview--selected))
+    (ein:nbview--show-input view cell)))
+
+(defun ein:nbview-clear-output ()
+  "Delete the outputs of the current code cell."
+  (interactive)
+  (let ((view (ein:nbview--current-view))
+        (cell (ein:nbview--code-cell-or-error)))
+    (ein:cell-clear-output cell t t t)
+    (ein:nbview--render-footer view cell)
+    (ein:nbview--set-dirty view)))
+
+(defun ein:nbview-clear-all-output ()
+  "Delete the outputs of every code cell."
+  (interactive)
+  (let ((view (ein:nbview--current-view)))
+    (dolist (cell (ein:view-cells view))
+      (when (ein:codecell-p cell)
+        (ein:cell-clear-output cell t t t)
+        (ein:nbview--render-footer view cell)))
+    (ein:nbview--set-dirty view)))
 
 ;;; Undo
 ;;
@@ -1096,6 +1299,10 @@ BUFFER defaults to the current buffer.  Return FN's value."
   "C-c RET" #'ein:nbview-merge-cell
   "C-c C-t" #'ein:nbview-toggle-cell-type
   "C-c C-v" #'ein:nbview-toggle-markdown-preview
+  "C-c C-e" #'ein:nbview-toggle-output
+  "C-c C-l" #'ein:nbview-clear-output
+  "C-c C-S-l" #'ein:nbview-clear-all-output
+  "C-c C-o" #'ein:nbview-output-map
   "M-RET" #'ein:nbview-run-and-advance
   "C-c C-z" #'ein:notebook-kernel-interrupt-command
   "C-c C-r" #'ein:notebook-reconnect-session-command
@@ -1130,6 +1337,8 @@ BUFFER defaults to the current buffer.  Return FN's value."
   (setq-local parse-sexp-lookup-properties t)
   (add-hook 'completion-at-point-functions #'ein:nbview-completion-at-point nil t)
   (add-hook 'kill-buffer-hook #'ein:nbview--kill-shadow-buffers nil t)
+  (add-hook 'kill-buffer-hook #'ein:nbview--cancel-output-timers nil t)
+  (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--input-enter-edit nil t)
   (jit-lock-register #'ein:nbview--jit-decorate)
   (add-hook 'post-command-hook #'ein:nbview--post-command nil t)
   (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--preview-enter-edit nil t)

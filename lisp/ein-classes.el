@@ -286,7 +286,11 @@ Implementation note:
 Typed `:input-prompt-number' becomes a problem when reading a
 notebook that saved "*".  So don't add `:type'!")
    (collapsed :initarg :collapsed :initform nil :type boolean)
-   (running :initarg :running :initform nil :type boolean)))
+   (running :initarg :running :initform nil :type boolean)
+   (clear-pending :initform nil :type boolean
+                  :documentation "\
+Non-nil after a `clear_output' with `wait': the outputs are cleared
+when the next output arrives.")))
 
 (defclass ein:textcell (ein:basecell)
   ((cell-type :initarg :cell-type :initform "text")

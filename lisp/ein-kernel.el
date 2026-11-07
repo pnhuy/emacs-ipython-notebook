@@ -787,7 +787,8 @@ not start or that other sessions share; on refusal only disconnect."
         "ein:kernel--handle-iopub-reply: msg_type=%s msg_id=%s parent_id=%s"
         msg-type msg-id parent-id)
       (ein:case-equal msg-type
-        (("stream" "display_data" "pyout" "pyerr" "error" "execute_result")
+        (("stream" "display_data" "update_display_data" "pyout" "pyerr" "error"
+          "execute_result")
          (aif (plist-get callbacks :output) ;; ein:cell--handle-output
              (ein:funcall-packed it msg-type content metadata)
            (ein:log 'warn (concat "ein:kernel--handle-iopub-reply: "

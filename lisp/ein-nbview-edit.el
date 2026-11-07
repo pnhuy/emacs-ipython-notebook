@@ -373,6 +373,8 @@ the cell being left.  Errors are logged, not signalled.")
 (declare-function ein:nbview-undo "ein-nbview")
 (declare-function ein:nbview-move-cell-up "ein-nbview")
 (declare-function ein:nbview-move-cell-down "ein-nbview")
+(declare-function ein:nbview-toggle-output "ein-nbview")
+(declare-function ein:nbview-toggle-input "ein-nbview")
 
 (defvar ein:nbview-command-map
   (let ((map (make-sparse-keymap)))
@@ -396,6 +398,8 @@ the cell being left.  Errors are logged, not signalled.")
     (keymap-set map "z" #'ein:nbview-undo)
     (keymap-set map "M-<up>" #'ein:nbview-move-cell-up)
     (keymap-set map "M-<down>" #'ein:nbview-move-cell-down)
+    (keymap-set map "o" #'ein:nbview-toggle-output)
+    (keymap-set map "O" #'ein:nbview-toggle-input)
     (keymap-set map "?" #'ein:nbview-help)
     map)
   "Keymap of the command state of the cells view.
@@ -529,16 +533,24 @@ on a header, footer or output selects the cell in command state.  With
       (mouse-set-point event)
     (let* ((posn (event-start event))
            (window (posn-window posn))
-           (pos (posn-point posn)))
+           (pos (posn-point posn))
+           (str (posn-string posn))
+           ;; An output string names its cell; its position is already
+           ;; the next cell's header.
+           (string-cell (and (stringp (car-safe str)) (cdr str)
+                             (< (cdr str) (length (car str)))
+                             (get-text-property (cdr str) 'ein-nbview-cell
+                                                (car str)))))
       (when (windowp window)
         (select-window window)
         (set-buffer (window-buffer window)))
       (when-let* ((view ein:nbview--view)
                   ((integer-or-marker-p pos))
-                  (cell (ein:nbview--cell-at pos))
+                  (cell (or string-cell (ein:nbview--cell-at pos)))
                   (bounds (ein:nbview--source-bounds view cell)))
         (let ((part (get-text-property pos 'ein-nbview-part)))
-          (if (or (eq part 'header)
+          (if (or string-cell
+                  (eq part 'header)
                   (and (eq part 'footer) (posn-string posn))
                   (not (<= (car bounds) pos (cdr bounds))))
               (progn

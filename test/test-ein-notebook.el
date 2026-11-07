@@ -1320,3 +1320,19 @@ value of `ein:worksheet-enable-undo'."
     (let ((json (ein:json-encode-notebook (ein:notebook-to-json ein:%notebook%))))
       (should (string-match-p "\"nbformat_minor\":6" json))
       (should (string-match-p "x_future" json)))))
+
+(ert-deftest ein:notebook-live-opened-notebook-forgets-killed-buffer ()
+  "A notebook whose buffer was killed without `ein:notebook-close' is
+not reused by `ein:notebook-open' (regression: reopening it signalled)."
+  (let* ((ein:notebook--opened-map (make-hash-table :test 'equal))
+         (buffer (ein:testing-notebook-make-new))
+         (notebook (buffer-local-value 'ein:%notebook% buffer))
+         (url (ein:$notebook-url-or-port notebook))
+         (path (ein:$notebook-notebook-path notebook)))
+    (ein:notebook-put-opened-notebook notebook)
+    (should (eq (ein:notebook--live-opened-notebook url path) notebook))
+    (let ((kill-buffer-query-functions nil))
+      (with-current-buffer buffer (set-buffer-modified-p nil))
+      (kill-buffer buffer))
+    (should-not (ein:notebook--live-opened-notebook url path))
+    (should-not (ein:notebook-get-opened-notebook url path))))

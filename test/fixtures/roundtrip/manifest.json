@@ -1,0 +1,50 @@
+{
+ "attachments.ipynb": {
+  "nbformat_valid": true
+ },
+ "empty.ipynb": {
+  "nbformat_valid": true
+ },
+ "error-output.ipynb": {
+  "nbformat_valid": true
+ },
+ "html-table.ipynb": {
+  "nbformat_valid": true
+ },
+ "jupyterlab-style.ipynb": {
+  "nbformat_valid": true
+ },
+ "latex-output.ipynb": {
+  "nbformat_valid": true
+ },
+ "multimime.ipynb": {
+  "nbformat_valid": true
+ },
+ "nb44-no-ids.ipynb": {
+  "nbformat_valid": true
+ },
+ "nb46-future.ipynb": {
+  "nbformat_valid": true
+ },
+ "raw-cell.ipynb": {
+  "nbformat_valid": true
+ },
+ "short-id.ipynb": {
+  "nbformat_valid": true
+ },
+ "smoke.ipynb": {
+  "nbformat_valid": true
+ },
+ "svg-output.ipynb": {
+  "nbformat_valid": true
+ },
+ "unknown-keys.ipynb": {
+  "nbformat_valid": false
+ },
+ "vscode-style.ipynb": {
+  "nbformat_valid": true
+ },
+ "widget-mime.ipynb": {
+  "nbformat_valid": true
+ }
+}

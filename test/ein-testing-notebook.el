@@ -56,6 +56,40 @@
                           (ein:$notebook-notebook-path notebook) data))
         (ein:notebook-buffer notebook)))))
 
+(defun ein:testing-notebook--rejoin (value &optional key)
+  "Join string vectors under `source' and `text' keys in VALUE.
+VALUE is parsed JSON (hash tables and vectors).  KEY is its key."
+  (cond
+   ((and (member key '("source" "text")) (vectorp value)
+         (seq-every-p #'stringp value))
+    (apply #'concat (append value nil)))
+   ((hash-table-p value)
+    (maphash (lambda (k v) (puthash k (ein:testing-notebook--rejoin v k) value))
+             value)
+    value)
+   ((vectorp value)
+    (cl-map 'vector #'ein:testing-notebook--rejoin value))
+   (t value)))
+
+(defun ein:testing-notebook-from-file (path)
+  "Open the .ipynb file at PATH as an EIN notebook; return its buffer.
+No server and no kernel are involved (the kernel is a stub), so
+nothing executes.  Reuses `ein:testing-notebook-from-json'.
+
+Like Jupyter Server's contents API (nbformat `rejoin_lines'), the
+multiline list form of `source' and output `text' is joined into a
+single string before EIN sees it."
+  (let* ((name (file-name-nondirectory path))
+         (content (json-serialize
+                   (ein:testing-notebook--rejoin
+                    (with-temp-buffer
+                      (insert-file-contents path)
+                      (json-parse-buffer :null-object :null
+                                         :false-object :false))))))
+    (ein:testing-notebook-from-json
+     (format "{\"path\": %s, \"name\": %s, \"type\": \"notebook\", \"format\": \"json\", \"mimetype\": null, \"writable\": true, \"content\": %s}"
+             (json-encode name) (json-encode name) content))))
+
 (defun ein:testing-notebook-make-data (name path cells)
   (setq cells
         (ein:testing-notebook--preprocess-cells-data-for-json-encode cells))

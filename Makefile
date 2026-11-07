@@ -1,11 +1,12 @@
 export EMACS ?= $(shell which emacs)
-export CASK := $(shell which cask)
-TEST_VERSION := $(shell python -c "from yq import cli; import sys; sys.exit(cli())" .jobs.build.strategy.matrix.emacs_version .github/workflows/test.yml | jq .[] | egrep "[0-9]" | sort -n | head -1)
-ifeq ($(CASK),)
-$(error Please install CASK at https://cask.readthedocs.io/en/latest/guide/installation.html)
-endif
+export CASK := $(shell which cask 2>/dev/null)
+TEST_VERSION = $(shell python -c "from yq import cli; import sys; sys.exit(cli())" .jobs.build.strategy.matrix.emacs_version .github/workflows/test.yml | jq .[] | egrep "[0-9]" | sort -n | head -1)
+# Cask is needed only by the legacy *-cask targets; the Cask-free targets
+# (deps, test-unit, test-integration, test-compile, lint) work without it.
+ifneq ($(CASK),)
 CASK_DIR := $(shell EMACS=$(EMACS) $(CASK) package-directory || exit 1)
 SRC=$(shell $(CASK) files)
+endif
 PKBUILD=2.3
 ELCFILES = $(SRC:.el=.elc)
 ifeq ($(TRAVIS_PULL_REQUEST_SLUG),)
@@ -57,38 +58,76 @@ clean:
 cask: $(CASK_DIR)
 
 $(CASK_DIR): Cask
+	@test -n "$(CASK)" || { echo "Please install CASK at https://cask.readthedocs.io/en/latest/guide/installation.html"; exit 1; }
 	$(CASK) install
 	touch $(CASK_DIR)
 
-.PHONY: test-compile
-test-compile: clean
+.PHONY: test-compile-cask
+test-compile-cask: clean
 	! ($(CASK) eval "(let ((byte-compile-error-on-warn t)) (cask-cli/build))" 2>&1 | egrep -a "(Warning|Error):") ; (ret=$$? ; $(CASK) clean-elc && exit $$ret)
 
 .PHONY: quick
-quick: $(CASK_DIR) autoloads test-compile test-ob-ein-recurse test-unit
+quick: $(CASK_DIR) autoloads test-compile-cask test-ob-ein-recurse test-unit-cask
 
 # Last I tried, I can get jupyterhub to launch a user server
 # on a random port 58153, but that instance is still-born, i.e.,
 # it posts 404 from the browser.  SimpleLocalProcessSpawner
 # results in Module not found.
 .PHONY: test-jupyterhub
-test-jupyterhub: test-compile
+test-jupyterhub: test-compile-cask
 	$(CASK) exec ecukes --tags @jupyterhub --reporter magnars
 
 .PHONY: test
-test: quick test-int
+test: quick test-int-legacy
 
-.PHONY: test-int
-test-int: clean
+.PHONY: test-int-legacy
+test-int-legacy: clean
 	$(CASK) exec ecukes --reporter magnars --debug
 
-.PHONY: test-unit
-test-unit:
+.PHONY: test-unit-cask
+test-unit-cask:
 	$(CASK) exec ert-runner -L ./lisp -L ./test -l test/testein.el test/test-ein*.el
 
 .PHONY: test-ob-ein-recurse
 test-ob-ein-recurse:
-	$(CASK) eval "(progn (require 'cl) (custom-set-variables (quote (org-babel-load-languages (quote ((emacs-lisp . t) (ein . t)))))) (org-version))"
+	$(CASK) eval "(progn (require 'cl-lib) (custom-set-variables (quote (org-babel-load-languages (quote ((emacs-lisp . t) (ein . t)))))) (org-version))"
+
+# ---------------------------------------------------------------------
+# Cask-free harness (004-modernize-ein-ui).  Dependencies live in
+# .deps/elpa; nothing touches ~/.emacs.d.
+
+EIN_TEST_INIT = $(EMACS) -Q --batch -l test/ein-test-init.el
+
+.PHONY: deps
+deps:
+	$(EMACS) -Q --batch -l tools/install-deps.el
+
+.PHONY: test-unit
+test-unit:
+	$(EIN_TEST_INIT)
+
+.PHONY: test-integration
+test-integration:
+	EIN_TEST_SELECTOR='(tag :integration)' $(EIN_TEST_INIT)
+
+# Compile copies of lisp/*.el in .build/ so no .elc lands in lisp/ (the
+# user's Emacs loads lisp/ directly and stale .elc would shadow sources).
+.PHONY: test-compile
+test-compile:
+	rm -rf .build && mkdir -p .build && cp lisp/*.el .build/
+	$(EMACS) -Q --batch -L .build \
+	  --eval "(progn (setq package-user-dir (expand-file-name \".deps/elpa\")) (package-initialize))" \
+	  --eval "(setq byte-compile-error-on-warn t)" \
+	  -f batch-byte-compile .build/*.el
+
+LINT_FILES = $(wildcard lisp/ein.el lisp/ein-view.el lisp/ein-latex.el lisp/ein-nbview*.el)
+
+.PHONY: lint
+lint:
+	$(EMACS) -Q --batch \
+	  --eval "(progn (setq package-user-dir (expand-file-name \".deps/elpa\")) (package-initialize))" \
+	  --eval "(require 'package-lint)" -L lisp \
+	  -f package-lint-batch-and-exit $(LINT_FILES)
 
 .PHONY: travis-install
 travis-install:

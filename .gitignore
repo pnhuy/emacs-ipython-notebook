@@ -13,3 +13,5 @@ dist
 ein-autoloads.el
 ert-profile
 ein-images
+.deps/
+.build/

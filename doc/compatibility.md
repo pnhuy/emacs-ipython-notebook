@@ -484,3 +484,49 @@ Notes:
   needs a real pointer, so it was not exercised in these batch runs.
 - With `emacs -nw`, mouse clicks need `xterm-mouse-mode`. The terminal
   row above was checked through the keymap and not with a physical mouse.
+
+## Performance
+
+T159 (SC-009): the benchmark from quickstart §7, run on the 300-cell
+notebook from `test/bench/make-bench-nb.py`. That notebook has 180
+code cells, 120 Markdown cells and 20 PNG images.
+
+Environment: GNU Emacs 31.1 in a graphic frame (X11 on Xvfb), with an
+84×34 window, on 2026-11-07. Every sample includes a forced
+`(redisplay t)`. The table shows the worst of three runs.
+
+| action | samples | median ms | p95 ms | target |
+|---|---|---|---|---|
+| open the notebook | 1 per run | 401 (total) | — | < 5000 |
+| type a character in a code cell | 20 | 1.0 | 33.2 | < 100 |
+| `scroll-up-command` | 10 | 2.0 | 25.8 | < 100 |
+| `scroll-down-command` | 10 | 3.6 | 23.0 | < 100 |
+| `j` next cell | 20 | 3.1 | 28.1 | < 100 |
+| `k` previous cell | 20 | 2.9 | 24.6 | < 100 |
+| edit/command state toggle | 20 | 0.9 | 4.6 | < 100 |
+| Markdown source/preview toggle | 20 | 1.5 | 21.7 | < 100 |
+| output update (stream appended to a visible cell) | 10 | 0.9 | 3.3 | < 100 |
+
+Results:
+
+- No cell was re-rendered while typing, which meets the target of at
+  most 1. Only the edited cell's decoration is updated; the
+  render-count test checks this.
+- The view invariants held after the run.
+- No profiling or hot-path fix was needed.
+
+How the samples were taken:
+
+- For the output update, the coalescing window
+  (`ein:nbview-output-coalesce-delay`) is closed before each sample.
+  Every sample is therefore a full, immediate footer render, not a
+  deferred one.
+- The benchmark checks that the typed text reached the cell source,
+  and that every appended output is shown.
+- Batch Emacs produces no meaningful timings, because it does no real
+  redisplay. Run the benchmark in a graphic or terminal frame.
+
+To reproduce:
+`emacs -Q -l test/bench/ein-nbview-bench.el --eval '(ein:nbview-dev-benchmark "/tmp/bench300.ipynb")'`.
+The bench file finds `lisp/`, `test/` and `.deps/elpa` relative to
+itself.

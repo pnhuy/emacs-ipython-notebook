@@ -36,11 +36,34 @@
           (ein:latex--tools 'unknown))
       (should-not (ein:latex-available-p))))
   (cl-letf (((symbol-function 'executable-find)
-             (lambda (name &rest _) (concat "/usr/bin/" name))))
+             (lambda (name &rest _) (concat "/usr/bin/" name)))
+            ((symbol-function 'ein:latex--sandbox-works-p) #'always))
     (dolist (method '(auto image))
       (let ((ein:latex-render-method method)
             (ein:latex--tools 'unknown))
         (should (ein:latex-available-p))))))
+
+(ert-deftest ein:latex-needs-a-sandbox ()
+  "Without a sandbox, formulas are text unless unsandboxed rendering is allowed.
+TeX can read any of your files, and formulas come from notebooks."
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (name &rest _)
+               (unless (equal name "bwrap") (concat "/usr/bin/" name)))))
+    (let ((ein:latex-render-method 'image)
+          (ein:latex--tools 'unknown))
+      (should-not (ein:latex-available-p)))
+    (let ((ein:latex-render-method 'image)
+          (ein:latex-allow-unsandboxed t)
+          (ein:latex--tools 'unknown))
+      (should (ein:latex-available-p))
+      (should (equal '("latex" "f.tex") (ein:latex--sandbox "/x" '("latex" "f.tex"))))))
+  ;; Bubblewrap that cannot make namespaces counts as no sandbox.
+  (cl-letf (((symbol-function 'executable-find)
+             (lambda (name &rest _) (concat "/usr/bin/" name)))
+            ((symbol-function 'ein:latex--sandbox-works-p) #'ignore))
+    (let ((ein:latex-render-method 'image)
+          (ein:latex--tools 'unknown))
+      (should-not (ein:latex-available-p)))))
 
 (ert-deftest ein:latex-text-fallback ()
   (should (equal "α + β ≤ x₁" (ein:latex-to-text "\\alpha + \\beta \\le x_1")))
@@ -121,8 +144,12 @@ than a large or HiDPI default font."
             ;; The job directory was private and is gone.
             (should jobs)
             (dolist (j jobs) (should-not (file-exists-p j)))
-            (should (member "-no-shell-escape" (cl-find "latex" commands
-                                                        :key #'car :test #'string-suffix-p)))
+            (let ((latex (cl-find-if (lambda (c) (member "f.tex" c)) commands)))
+              (should (member "-no-shell-escape" latex))
+              ;; Run in the sandbox, which hides the home directory.
+              (when (plist-get (ein:latex--tools) :bwrap)
+                (should (string-suffix-p "bwrap" (car latex)))
+                (should (member (expand-file-name "~") latex))))
             ;; Second call: cache hit, image returned directly, no process.
             (setq commands nil)
             (let ((again (ein:latex-render "x^2 + \\alpha" nil
@@ -149,6 +176,25 @@ than a large or HiDPI default font."
           (ein:latex-render "\\badcommand{" nil (lambda (&rest _) (cl-incf calls)))
           (accept-process-output nil 0.3)
           (should (= 1 calls)))
+      (delete-directory cache t))))
+
+(ert-deftest ein:latex-render-cannot-read-files ()
+  "A formula cannot \\input a file outside the job directory."
+  (skip-unless (ein:testing-latex-tools-p))
+  (let* ((cache (make-temp-file "ein-latex-cache-" t))
+         (marker (make-temp-file "ein-latex-marker-" nil ".tex" "y"))
+         (ein:latex-cache-directory cache)
+         (ein:latex-render-method 'image)
+         (ein:latex--tools 'unknown)
+         result)
+    (unwind-protect
+        (progn
+          (ein:latex-render (format "x\\input{%s}" marker) nil
+                            (lambda (s) (setq result s)))
+          (with-timeout (10 (ert-fail "No LaTeX callback within 10 s"))
+            (while (not result) (accept-process-output nil 0.05)))
+          (should-not (get-text-property 0 'display result)))
+      (delete-file marker)
       (delete-directory cache t))))
 
 (ert-deftest ein:latex-queue-limit-and-cancel ()

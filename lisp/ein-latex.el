@@ -56,6 +56,24 @@ the frame shows images, else as Unicode text.
                  (const :tag "Unicode text" text))
   :package-version '(ein . "0.18"))
 
+(defcustom ein:latex-bwrap-program "bwrap"
+  "Bubblewrap, which runs LaTeX without access to your files.
+TeX can read any file you can read (`\\input{~/.ssh/id_rsa}'), and
+formulas come from notebooks, which may be untrusted.  So LaTeX runs
+in a sandbox that hides your home directory, /tmp, /run, /mnt and
+/media, keeping only TeX's own directories and the job directory, with
+no network."
+  :type 'string
+  :package-version '(ein . "0.18"))
+
+(defcustom ein:latex-allow-unsandboxed nil
+  "Non-nil to render formulas as images even without a sandbox.
+Without bubblewrap (see `ein:latex-bwrap-program'), formulas are shown
+as text unless this is non-nil.  Then a formula in a notebook you open
+can read any of your files into its image."
+  :type 'boolean
+  :package-version '(ein . "0.18"))
+
 (defcustom ein:latex-scale 1.0
   "Scale of LaTeX images relative to the default font.
 At 1.0 a formula's em is as large as the default font's."
@@ -257,17 +275,32 @@ Unicode sub- and superscripts; anything else is kept as written."
 
 (defvar ein:latex--tools 'unknown
   "Plist of the LaTeX tools found, nil when missing, `unknown' before a lookup.
-Keys: `:latex', and `:svg' (dvisvgm) or `:png' (dvipng).")
+Keys: `:latex', `:svg' (dvisvgm) or `:png' (dvipng), and `:bwrap', the
+sandbox, or nil when rendering unsandboxed.")
+
+(defun ein:latex--sandbox-works-p (bwrap)
+  "Non-nil when BWRAP can make a sandbox here (user namespaces allowed)."
+  (eq 0 (ignore-errors
+          (call-process bwrap nil nil nil "--ro-bind" "/" "/"
+                        "--unshare-all" "--die-with-parent" "--" "true"))))
 
 (defun ein:latex--tools ()
   "The LaTeX tools, looked up once."
   (when (eq ein:latex--tools 'unknown)
-    (let ((latex (executable-find "latex"))
-          (svg (and (image-type-available-p 'svg) (executable-find "dvisvgm")))
-          (png (and (image-type-available-p 'png) (executable-find "dvipng"))))
+    (let* ((latex (executable-find "latex"))
+           (svg (and (image-type-available-p 'svg) (executable-find "dvisvgm")))
+           (png (and (image-type-available-p 'png) (executable-find "dvipng")))
+           (bwrap (and latex (or svg png)
+                       (executable-find ein:latex-bwrap-program)))
+           (bwrap (and bwrap (ein:latex--sandbox-works-p bwrap) bwrap)))
       (setq ein:latex--tools
             (and latex (or svg png)
-                 (list :latex latex :svg svg :png (and (not svg) png))))))
+                 (or bwrap ein:latex-allow-unsandboxed
+                     (progn (ein:log 'info "LaTeX shown as text: no sandbox \
+(install bubblewrap, or see `ein:latex-allow-unsandboxed')")
+                            nil))
+                 (list :latex latex :svg svg :png (and (not svg) png)
+                       :bwrap bwrap)))))
   ein:latex--tools)
 
 (defun ein:latex-available-p ()
@@ -275,6 +308,40 @@ Keys: `:latex', and `:svg' (dvisvgm) or `:png' (dvipng).")
   (and (not (eq ein:latex-render-method 'text))
        (ein:latex--tools)
        t))
+
+(defvar ein:latex--texmf-user-dirs 'unknown
+  "TeX's per-user directories, `unknown' before a lookup.")
+
+(defun ein:latex--sandbox (dir command)
+  "COMMAND run in a sandbox seeing only TeX's files and DIR, when there is one."
+  (if-let* ((bwrap (plist-get (ein:latex--tools) :bwrap)))
+      (append
+       (list bwrap "--ro-bind" "/" "/" "--dev" "/dev")
+       ;; Hide where personal files live.
+       (cl-loop for hidden in (list (expand-file-name "~") "/tmp" "/run"
+                                    "/mnt" "/media" "/var/tmp"
+                                    (directory-file-name temporary-file-directory))
+                when (file-directory-p hidden)
+                append (list "--tmpfs" hidden))
+       ;; Then show TeX's own directories again, read-only.
+       (cl-loop for dir in (ein:latex--texmf-user-dirs)
+                append (list "--ro-bind" dir dir))
+       (list "--bind" dir dir "--chdir" dir
+             "--unshare-all" "--die-with-parent" "--new-session" "--")
+       command)
+    command))
+
+(defun ein:latex--texmf-user-dirs ()
+  "TeX's per-user directories (font caches, config, packages) that exist."
+  (when (eq ein:latex--texmf-user-dirs 'unknown)
+    (setq ein:latex--texmf-user-dirs
+          (cl-loop for var in '("TEXMFVAR" "TEXMFCONFIG" "TEXMFHOME")
+                   for value = (ignore-errors
+                                 (car (process-lines "kpsewhich" "-var-value" var)))
+                   for dir = (and value (expand-file-name value))
+                   when (and dir (file-directory-p dir))
+                   collect dir)))
+  ein:latex--texmf-user-dirs)
 
 ;;; Jobs
 
@@ -419,12 +486,13 @@ identifies the requester for `ein:latex-cancel'."
                     #'ein:latex--convert)))
 
 (defun ein:latex--run (job command next)
-  "Run COMMAND in the directory of JOB, then call NEXT with JOB on success."
+  "Run COMMAND in the directory of JOB, then call NEXT with JOB on success.
+It runs sandboxed, see `ein:latex-bwrap-program'."
   (let ((default-directory (file-name-as-directory (ein:latex--job-dir job))))
     (setf (ein:latex--job-process job)
           (make-process
            :name "ein-latex"
-           :command command
+           :command (ein:latex--sandbox (ein:latex--job-dir job) command)
            :buffer nil
            :noquery t
            :connection-type 'pipe

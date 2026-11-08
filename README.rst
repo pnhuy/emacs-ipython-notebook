@@ -289,6 +289,7 @@ Variable (default)                             Meaning
 ``ein:latex-max-processes`` (``2``)            concurrent LaTeX processes
 ``ein:latex-timeout`` (``20``)                 seconds before a LaTeX process is stopped
 ``ein:latex-cache-directory``                  rendered formulas (``~/.emacs.d/ein/latex-cache/``)
+``ein:latex-allow-unsandboxed`` (``nil``)      render images even without bubblewrap
 ``ein:completion-timeout`` (``0.5``)           seconds to wait for kernel completion
 ``ein:log-include-code`` (``nil``)             include executed code in debug logs
 =============================================  ==========================================
@@ -299,9 +300,16 @@ LaTeX (optional)
 ----------------
 Formulas in Markdown and LaTeX outputs are rendered as images when
 ``latex`` and ``dvisvgm`` (or ``dvipng``) are installed, for example from
-TeX Live.  Without them, or in a terminal, formulas are shown as Unicode
-text (``e^{iπ}``); constructs without a Unicode form stay as written.  Set
-``ein:latex-render-method`` to ``text`` to never start a process.
+TeX Live, together with bubblewrap (``bwrap``).  Without them, or in a
+terminal, formulas are shown as Unicode text (``e^{iπ}``); constructs
+without a Unicode form stay as written.  Set ``ein:latex-render-method``
+to ``text`` to never start a process.
+
+TeX can read any file you can (``\input{~/.ssh/id_rsa}``), and formulas
+come from notebooks, so LaTeX runs under bubblewrap: it sees TeX's own
+files and its job directory, not your home directory, ``/tmp`` or
+``/run``, and has no network.  Without a working bubblewrap formulas stay
+text, unless you set ``ein:latex-allow-unsandboxed``.
 
 Security
 --------
@@ -312,8 +320,8 @@ Security
   show as links until ``ein:nbview-fetch-remote-images`` is set.
 * Tokens, passwords and cookies are redacted from EIN's logs; executed code
   is logged only with ``ein:log-include-code``.
-* LaTeX runs in a private (mode 700) temporary directory, deleted after
-  every job.
+* LaTeX runs sandboxed by bubblewrap, in a private (mode 700) temporary
+  directory deleted after every job.
 
 Classic view
 ------------

@@ -45,8 +45,9 @@
 
 (defmacro eintest:with-save-stub (server-last-modified &rest body)
   "Run BODY with HTTP stubbed.
-GET returns SERVER-LAST-MODIFIED; PUT records the request and does
-not call back (the test drives the callbacks)."
+GET returns SERVER-LAST-MODIFIED, or fails when that is `:fail'; PUT
+records the request and does not call back (the test drives the
+callbacks)."
   (declare (indent 1))
   `(let ((eintest:save-requests nil))
      (cl-letf (((symbol-function 'ein:query-singleton-ajax)
@@ -54,8 +55,11 @@ not call back (the test drives the callbacks)."
                   (let ((type (plist-get settings :type)))
                     (push (list type url settings) eintest:save-requests)
                     (when (equal type "GET")
-                      (funcall (plist-get settings :success)
-                               :data (list :last_modified ,server-last-modified)))))))
+                      (if (eq ,server-last-modified :fail)
+                          (funcall (plist-get settings :error)
+                                   :symbol-status 'error)
+                        (funcall (plist-get settings :success)
+                                 :data (list :last_modified ,server-last-modified))))))))
        ,@body)))
 
 (defun eintest:save-puts ()
@@ -116,7 +120,8 @@ not call back (the test drives the callbacks)."
                (lambda (_nb) 'overwrite)))
       (eintest:with-save-stub "t2"
         (ein:notebook-save-notebook ein:%notebook%)
-        (should (= 1 (length (eintest:save-puts))))))
+        (should (= 1 (length (eintest:save-puts))))
+        (eintest:save-succeed (car (eintest:save-puts)) "t1")))
     (cl-letf (((symbol-function 'ein:notebook--confirm-overwrite)
                (lambda (_nb) (error "Should not ask"))))
       (eintest:with-save-stub "t1"
@@ -146,3 +151,73 @@ not call back (the test drives the callbacks)."
                :data (list :last_modified "t3"))
       (should-not (ein:notebook-modified-p ein:%notebook%))
       (should (equal "t3" (ein:$notebook-last-modified ein:%notebook%))))))
+
+(defun eintest:save-edit-a-cell (text)
+  (let ((cell (cl-find-if (lambda (c) (cl-typep c 'ein:codecell))
+                          (ein:worksheet-get-cells ein:%worksheet%))))
+    (ein:cell-set-text cell text)))
+
+(defun eintest:save-succeed (request last-modified)
+  (funcall (plist-get (nth 2 request) :success)
+           :data (list :last_modified last-modified)))
+
+(defun eintest:save-body (request)
+  (decode-coding-string (plist-get (nth 2 request) :data) 'utf-8))
+
+(ert-deftest ein:content-save-keeps-edits-made-while-saving ()
+  "An edit typed while the save is in flight stays modified after it succeeds."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+    (eintest:with-save-stub "t1"
+      (eintest:save-edit-a-cell "before_save")
+      (ein:notebook-save-notebook ein:%notebook%)
+      (let ((put (car (eintest:save-puts))))
+        (should (string-match-p "before_save" (eintest:save-body put)))
+        (eintest:save-edit-a-cell "after_save")
+        (eintest:save-succeed put "t2"))
+      (should (ein:notebook-modified-p ein:%notebook%))
+      ;; Saving again sends the edit and then clears modified.
+      (setq eintest:save-requests nil)
+      (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+      (ein:notebook-save-notebook ein:%notebook%)
+      (eintest:save-succeed (car (eintest:save-puts)) "t3")
+      (should-not (ein:notebook-modified-p ein:%notebook%)))))
+
+(ert-deftest ein:content-save-serializes-overlapping-saves ()
+  "A save asked for during another waits for it, keeping its callback."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+    (eintest:with-save-stub "t1"
+      (cl-letf (((symbol-function 'message) #'ignore))
+        (let (called)
+          (ein:notebook-save-notebook ein:%notebook%)
+          (eintest:save-edit-a-cell "second")
+          (ein:notebook-save-notebook ein:%notebook% (lambda (x) (setq called x)) '(done))
+          (should (= 1 (length (eintest:save-puts))))
+          ;; The first succeeds; the queued save starts with the newer text.
+          (eintest:save-succeed (car (eintest:save-puts)) "t1")
+          (should (= 2 (length (eintest:save-puts))))
+          (should (string-match-p "second" (eintest:save-body (car (eintest:save-puts)))))
+          (should-not called)
+          (eintest:save-succeed (car (eintest:save-puts)) "t1")
+          (should (eq called 'done))
+          (should-not (ein:$notebook-saving ein:%notebook%))
+          (should-not (ein:notebook-modified-p ein:%notebook%)))))))
+
+(ert-deftest ein:content-save-unverified-conflict-asks ()
+  "When the server copy cannot be checked, ask; declining sends no PUT."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (let (asked)
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_p) (setq asked t) nil)))
+          (eintest:with-save-stub :fail
+            (ein:notebook-save-notebook ein:%notebook%)
+            (should asked)
+            (should-not (eintest:save-puts))))
+        (should (ein:notebook-modified-p ein:%notebook%))
+        (should-not (ein:$notebook-saving ein:%notebook%))
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_p) t)))
+          (eintest:with-save-stub :fail
+            (ein:notebook-save-notebook ein:%notebook%)
+            (should (= 1 (length (eintest:save-puts))))))))))

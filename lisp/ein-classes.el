@@ -168,6 +168,10 @@ WARNING: OBJ and SLOT are evaluated multiple times,
 `ein:$notebook-view' : `ein:view'
    Presentation of this notebook: an `ein:classic-view' (made lazily
    by `ein:notebook--view') or an `ein:nbview'.
+
+`ein:$notebook-saving' : nil, t or list
+   Non-nil while a save is in flight: the (CALLBACK CBARGS ERRBACK) of
+   saves asked for meanwhile, newest first, or t when there are none.
 "
   url-or-port
   notebook-id ;; In IPython-2.0 this is "[:path]/[:name].ipynb"
@@ -187,7 +191,8 @@ WARNING: OBJ and SLOT are evaluated multiple times,
   api-version
   raw
   last-modified
-  view)
+  view
+  saving)
 
 
 ;;; Worksheet

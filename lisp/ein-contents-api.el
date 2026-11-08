@@ -297,8 +297,9 @@ other field sees null as nil."
                            (list :reason reason :symbol-status symbol-status))))))
 
 (defun ein:content-query-last-modified (url-or-port path callback)
-  "Call CALLBACK with the server's `last_modified' for PATH, or nil.
-Uses GET ?content=0, which does not transfer the notebook."
+  "Call CALLBACK with the server's `last_modified' for PATH.
+That is nil when the server gives none, and `:error' when the request
+failed.  Uses GET ?content=0, which does not transfer the notebook."
   (ein:query-singleton-ajax
    (concat (ein:notebooklist-url url-or-port path) "?content=0")
    :type "GET"
@@ -307,7 +308,7 @@ Uses GET ?content=0, which does not transfer the notebook."
              (lambda (&key data &allow-other-keys)
                (funcall callback (and (listp data) (plist-get data :last_modified)))))
    :error (cl-function
-           (lambda (&rest _) (funcall callback nil)))))
+           (lambda (&rest _) (funcall callback :error)))))
 
 (defun ein:content-rename (content new-path &optional callback cbargs)
   (ein:query-singleton-ajax

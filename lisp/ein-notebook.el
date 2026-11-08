@@ -707,30 +707,77 @@ without edits reproduces it (contracts/notebook-roundtrip.md G2-G9)."
                     (plist-get (ein:$notebook-raw notebook) :metadata)))
       (cells . ,(apply #'vector all-cells)))))
 
+(defun ein:notebook--edit-ticks (notebook)
+  "Alist of each worksheet of NOTEBOOK and the text edit tick of its buffer."
+  (mapcar (lambda (ws)
+            (cons ws (let ((buffer (ein:worksheet-buffer ws)))
+                       (and (buffer-live-p buffer)
+                            (buffer-chars-modified-tick buffer)))))
+          (ein:$notebook-worksheets notebook)))
+
+(defun ein:notebook--save-finished (notebook)
+  "Note that the save of NOTEBOOK in flight ended; run the saves queued since.
+They become one save calling each queued callback, or errback."
+  (let ((queued (and (consp (ein:$notebook-saving notebook))
+                     (reverse (ein:$notebook-saving notebook)))))
+    (setf (ein:$notebook-saving notebook) nil)
+    (when (and queued (ein:notebook-live-p notebook))
+      (ein:notebook-save-notebook
+       notebook
+       (lambda ()
+         (dolist (q queued)
+           (when (nth 0 q) (apply (nth 0 q) (nth 1 q)))))
+       nil
+       (lambda ()
+         (dolist (q queued)
+           (when (nth 2 q) (funcall (nth 2 q)))))))))
+
 (defun ein:notebook-save-notebook (notebook &optional callback cbargs errback)
-  (condition-case err
-      (with-current-buffer (ein:notebook-buffer notebook)
-        (cl-letf (((symbol-function 'delete-trailing-whitespace) #'ignore))
-          (run-hooks 'before-save-hook)))
-    (error (ein:log 'warn "ein:notebook-save-notebook: Saving despite '%s'."
-                    (error-message-string err))))
-  ;; Build (and encode) the body before any request: a notebook that
-  ;; cannot be encoded signals here and stays modified (T069).
-  (let ((content (ein:content-from-notebook notebook)))
-    (ein:content-to-json content)
-    (ein:notebook--check-conflict
-     notebook
-     (lambda ()
-       (ein:events-trigger (ein:$notebook-events notebook)
-                           'notebook_saving.Notebook)
-       (ein:content-save content
-                         (lambda (&rest args)
-                           (setf (ein:$notebook-last-modified notebook)
-                                 (ein:$content-last-modified content))
-                           (apply #'ein:notebook-save-notebook-success args))
-                         (list notebook callback cbargs)
-                         #'ein:notebook-save-notebook-error
-                         (list notebook errback))))))
+  "Save NOTEBOOK to the server, then apply CALLBACK to CBARGS.
+Call ERRBACK if the save fails.  A save asked for while another is in
+flight runs once that one ends, so that the server keeps the latest edits."
+  (if (ein:$notebook-saving notebook)
+      (progn (setf (ein:$notebook-saving notebook)
+                   (cons (list callback cbargs errback)
+                         (and (consp (ein:$notebook-saving notebook))
+                              (ein:$notebook-saving notebook))))
+             (message "Saving; will save the newer edits next"))
+    (condition-case err
+        (with-current-buffer (ein:notebook-buffer notebook)
+          (cl-letf (((symbol-function 'delete-trailing-whitespace) #'ignore))
+            (run-hooks 'before-save-hook)))
+      (error (ein:log 'warn "ein:notebook-save-notebook: Saving despite '%s'."
+                      (error-message-string err))))
+    ;; Build (and encode) the body before any request: a notebook that
+    ;; cannot be encoded signals here and stays modified (T069).
+    (let ((content (ein:content-from-notebook notebook))
+          (ticks (ein:notebook--edit-ticks notebook)))
+      (ein:content-to-json content)
+      (setf (ein:$notebook-saving notebook) t)
+      (condition-case err
+          (ein:notebook--check-conflict
+           notebook
+           (lambda ()
+             (ein:events-trigger (ein:$notebook-events notebook)
+                                 'notebook_saving.Notebook)
+             (ein:content-save content
+                               (lambda (&rest args)
+                                 (setf (ein:$notebook-last-modified notebook)
+                                       (ein:$content-last-modified content))
+                                 (unwind-protect
+                                     (apply #'ein:notebook-save-notebook-success
+                                            (car args) ticks (cdr args))
+                                   (ein:notebook--save-finished notebook)))
+                               (list notebook callback cbargs)
+                               (lambda (&rest args)
+                                 (unwind-protect
+                                     (apply #'ein:notebook-save-notebook-error args)
+                                   (ein:notebook--save-finished notebook)))
+                               (list notebook errback)))
+           ;; Declined by the user: do not ask again for a queued save.
+           (lambda () (setf (ein:$notebook-saving notebook) nil)))
+        (error (setf (ein:$notebook-saving notebook) nil)
+               (signal (car err) (cdr err)))))))
 
 (defun ein:notebook--confirm-overwrite (notebook)
   "Ask what to do about NOTEBOOK having changed on the server.
@@ -756,36 +803,64 @@ Return `overwrite', `reload' or `cancel'."
       (ein:notebook-close notebook
                           (lambda () (ein:notebook-open url-or-port path))))))
 
-(defun ein:notebook--check-conflict (notebook proceed)
+(defun ein:notebook--check-conflict (notebook proceed &optional abort)
   "Call PROCEED unless NOTEBOOK changed on the server and the user declines.
 Compares the server's `last_modified' with the value recorded at open
-or at the last save (T070).  Without a recorded value, just PROCEED."
-  (let ((recorded (ein:$notebook-last-modified notebook)))
+or at the last save (T070).  Without a recorded value, just PROCEED.
+When the server cannot be asked, ask the user before overwriting.
+Call ABORT, if given, when not proceeding."
+  (let ((recorded (ein:$notebook-last-modified notebook))
+        (decline (lambda (fmt &rest args)
+                   (apply #'message fmt args)
+                   (when abort (funcall abort)))))
     (if (null recorded)
         (funcall proceed)
       (ein:content-query-last-modified
        (ein:$notebook-url-or-port notebook)
        (ein:$notebook-notebook-path notebook)
        (lambda (current)
-         (if (or (null current) (equal current recorded))
-             (funcall proceed)
+         (cond
+          ((eq current :error)
+           (if (ein:notebook--confirm-unverified notebook)
+               (funcall proceed)
+             (funcall decline "Save cancelled; notebook still modified")))
+          ((or (null current) (equal current recorded))
+           (funcall proceed))
+          (t
            (pcase (ein:notebook--confirm-overwrite notebook)
              ('overwrite (funcall proceed))
-             ('reload (ein:notebook--reload notebook))
-             (_ (message "Save cancelled; notebook still modified")))))))))
+             ('reload (when abort (funcall abort))
+                      (ein:notebook--reload notebook))
+             (_ (funcall decline "Save cancelled; notebook still modified"))))))))))
+
+(defun ein:notebook--confirm-unverified (notebook)
+  "Ask whether to save NOTEBOOK though the server copy could not be checked."
+  (yes-or-no-p
+   (format "Could not check whether %s changed on the server.  Overwrite it anyway? "
+           (ein:$notebook-notebook-name notebook))))
 
 (defun ein:notebook-save-notebook-command ()
   "Save the notebook."
   (interactive)
   (ein:notebook-save-notebook ein:%notebook%))
 
-(defun ein:notebook-save-notebook-success (notebook &optional callback cbargs)
+(defun ein:notebook-save-notebook-success (notebook &optional ticks callback cbargs)
+  "Mark NOTEBOOK saved, then call CALLBACK with CBARGS.
+TICKS, from `ein:notebook--edit-ticks' when the saved copy was taken,
+leaves modified each worksheet edited since: the server lacks those edits."
   (ein:log 'verbose "Notebook is saved.")
-  (setf (ein:$notebook-dirty notebook) nil)
-  (mapc (lambda (ws)
-          (ein:worksheet-save-cells ws) ; [#]_
-          (ein:worksheet-set-modified-p ws nil))
-        (ein:$notebook-worksheets notebook))
+  (let ((unchanged t))
+    (mapc (lambda (ws)
+            (let ((tick (assq ws ticks))
+                  (buffer (ein:worksheet-buffer ws)))
+              (if (and tick (buffer-live-p buffer)
+                       (not (eql (cdr tick) (buffer-chars-modified-tick buffer))))
+                  (setq unchanged nil)
+                (ein:worksheet-save-cells ws) ; [#]_
+                (ein:worksheet-set-modified-p ws nil))))
+          (ein:$notebook-worksheets notebook))
+    (when unchanged
+      (setf (ein:$notebook-dirty notebook) nil)))
   (ein:events-trigger (ein:$notebook-events notebook)
                       'notebook_saved.Notebook)
   (when callback

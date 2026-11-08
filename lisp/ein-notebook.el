@@ -408,7 +408,9 @@ notebook buffer then the user will be prompted to select an opened notebook."
                          (ein:list-available-kernels (ein:$notebook-url-or-port notebook))))))
      (list notebook kernel-name)))
   (let* ((kernelspec (ein:get-kernelspec
-                      (ein:$notebook-url-or-port notebook) kernel-name)))
+                      (ein:$notebook-url-or-port notebook) kernel-name))
+         (windows (ignore-errors
+                    (get-buffer-window-list (ein:notebook-buffer notebook) nil t))))
     (setf (ein:$notebook-kernelspec notebook) kernelspec)
     (puthash (cons (ein:$notebook-url-or-port notebook)
                    (ein:$notebook-notebook-path notebook))
@@ -421,8 +423,22 @@ notebook buffer then the user will be prompted to select an opened notebook."
     (cl-loop repeat 10
           until (null (ein:$kernel-websocket (ein:$notebook-kernel notebook)))
           do (ein:accept-output-for 0.5)
-          finally return (ein:notebook-open (ein:$notebook-url-or-port notebook)
-                                            (ein:$notebook-notebook-path notebook)))))
+          finally return (ein:notebook-open
+                          (ein:$notebook-url-or-port notebook)
+                          (ein:$notebook-notebook-path notebook) nil
+                          (lambda (reopened _created)
+                            (ein:notebook--show-in-windows reopened windows))
+                          nil t))))
+
+(defun ein:notebook--show-in-windows (notebook windows)
+  "Show NOTEBOOK in the live ones of WINDOWS, which showed it before it
+was reopened, selecting the first; else in the selected window."
+  (let ((buffer (ein:notebook-buffer notebook))
+        (live (seq-filter #'window-live-p windows)))
+    (if (null live)
+        (pop-to-buffer-same-window buffer)
+      (dolist (w live) (set-window-buffer w buffer))
+      (select-window (car live)))))
 
 (defun ein:notebook-install-kernel (notebook)
   (let* ((base-url "/api/kernels")

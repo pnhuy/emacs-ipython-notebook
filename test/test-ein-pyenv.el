@@ -228,5 +228,32 @@ the chosen one."
       (should-error (ein:pyenv--with-ipykernel "/p/.venv/bin/python" #'ignore)
                     :type 'user-error))))
 
+(ert-deftest ein:pyenv-switch-kernel-reopens-in-same-window ()
+  "The reopened notebook takes the old one's window instead of splitting."
+  (let* ((ein:notebook--session-kernels (make-hash-table :test #'equal))
+         (old (generate-new-buffer "old.ipynb"))
+         (new (generate-new-buffer "new.ipynb"))
+         (ks (make-ein:$kernelspec :name "python3" :language "python" :spec nil))
+         (nb (make-ein:$notebook :url-or-port 8888 :notebook-path "a.ipynb"
+                                 :kernel (make-ein:$kernel)))
+         open-args)
+    (unwind-protect
+        (save-window-excursion
+          (delete-other-windows)
+          (switch-to-buffer old)
+          (cl-letf (((symbol-function 'ein:get-kernelspec) (lambda (&rest _) ks))
+                    ((symbol-function 'ein:notebook-buffer)
+                     (lambda (n) (if (eq n nb) old new)))
+                    ((symbol-function 'ein:notebook-save-notebook)
+                     (lambda (&rest _) (switch-to-buffer "*scratch*") (kill-buffer old)))
+                    ((symbol-function 'ein:notebook-open)
+                     (lambda (&rest args) (setq open-args args)
+                       (funcall (nth 3 args) 'reopened nil))))
+            (ein:notebook-switch-kernel nb "python3")
+            (should (nth 5 open-args))          ; no-pop
+            (should (= 1 (length (window-list))))
+            (should (eq (window-buffer (selected-window)) new))))
+      (mapc (lambda (b) (when (buffer-live-p b) (kill-buffer b))) (list old new)))))
+
 (provide 'test-ein-pyenv)
 ;;; test-ein-pyenv.el ends here

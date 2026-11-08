@@ -301,6 +301,13 @@ Regression: footers drawn before the buffer had a window kept the
                                  'ein-nbview-part 'placeholder))
       (should (ein:nbview--check-invariants)))))
 
+(ert-deftest ein:nbview-layout-empty-notebook-tangible ()
+  "The cursor can rest on the placeholder of an empty notebook;
+otherwise `cursor-intangible-mode' signals on every redisplay."
+  (ein:testing-with-nbview "empty.ipynb"
+    (should-not (ein:view-cells ein:nbview--view))
+    (should (text-property-not-all (point-min) (point-max) 'cursor-intangible t))))
+
 (ert-deftest ein:nbview-layout-display-updates-silent ()
   "Prompt and output re-renders neither modify the buffer nor touch undo."
   (ein:testing-with-nbview "smoke.ipynb"

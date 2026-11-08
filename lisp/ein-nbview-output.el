@@ -191,6 +191,7 @@ Nil means DATA has no type of `ein:nbview-mime-priority'."
     (if (and data (ein:nbview-output--usable-p mime context))
         (let* ((max (ein:nbview-output--max-size context))
                (props (append (list :max-width (car max) :max-height (cdr max)
+                                    :scale (ein:nbview-image-scale)
                                     :ascent 'center)
                               (and (numberp mw) (list :width (min mw (car max))))
                               (and (numberp mh) (not (numberp mw))

@@ -342,8 +342,10 @@ What shows below the source is the `before-string' of an overlay on it
               'ein-nbview-cell cell 'ein-nbview-part 'footer))
 
 (defun ein:nbview--placeholder-string ()
-  "Return the empty-notebook placeholder character."
-  (propertize "\n" 'read-only t 'cursor-intangible t
+  "Return the empty-notebook placeholder character.
+It is the one place point can rest in an empty notebook, so it is not
+cursor-intangible."
+  (propertize "\n" 'read-only t
               'ein-nbview-part 'placeholder 'front-sticky t
               'display ein:nbview-placeholder-text))
 

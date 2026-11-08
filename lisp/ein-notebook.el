@@ -188,7 +188,8 @@ Lasts for this Emacs session.")
 
 (defun ein:notebook--apply-session-kernel (notebook)
   "Pick NOTEBOOK's kernel: the one last switched to in this Emacs, else
-the first of `ein:notebook-session-kernel-functions'."
+the first of `ein:notebook-session-kernel-functions'.  A notebook with
+no kernel gets the server's default kernel."
   (when-let* ((name (or (gethash (cons (ein:$notebook-url-or-port notebook)
                                        (ein:$notebook-notebook-path notebook))
                                  ein:notebook--session-kernels)
@@ -197,7 +198,12 @@ the first of `ein:notebook-session-kernel-functions'."
     (if-let* ((kernelspec (ein:get-kernelspec (ein:$notebook-url-or-port notebook) name)))
         (setf (ein:$notebook-kernelspec notebook) kernelspec)
       (ein:log 'warn "Kernel %s is unknown to %s; keeping the notebook's kernel"
-               name (ein:$notebook-url-or-port notebook)))))
+               name (ein:$notebook-url-or-port notebook))))
+  ;; A new notebook's metadata names no kernel: use the server's default,
+  ;; which is the kernel the server would start anyway.
+  (unless (ein:$notebook-kernelspec notebook)
+    (setf (ein:$notebook-kernelspec notebook)
+          (ein:get-kernelspec (ein:$notebook-url-or-port notebook) :default))))
 
 (defun ein:notebook-open--decorate-callback (notebook existing pending-clear callback no-pop)
   "In addition to CALLBACK,

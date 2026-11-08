@@ -15,6 +15,7 @@
 (require 'ein-pyenv)
 (require 'ein-jupyter)
 (require 'ein-notebook)
+(require 'ein-nbview-toolbar)
 
 (defun ein:testing-pyenv--python (env &optional status)
   "Make ENV a fake environment whose python exits with STATUS."
@@ -169,6 +170,18 @@ the chosen one."
                                           :kernelspec py3)))
         (ein:notebook--apply-session-kernel reopened)
         (should (eq (ein:$notebook-kernelspec reopened) venv))))))
+
+(ert-deftest ein:pyenv-new-notebook-gets-default-kernel ()
+  "A notebook whose metadata names no kernel shows the server's default."
+  (let* ((ein:notebook--session-kernels (make-hash-table :test #'equal))
+         (ein:notebook-session-kernel-functions nil)
+         (py3 (make-ein:$kernelspec :name "python3" :language "python" :spec nil))
+         (nb (make-ein:$notebook :url-or-port 8888 :notebook-path "new.ipynb")))
+    (cl-letf (((symbol-function 'ein:get-kernelspec)
+               (lambda (_url name &rest _) (and (eq name :default) py3))))
+      (ein:notebook--apply-session-kernel nb)
+      (should (eq (ein:$notebook-kernelspec nb) py3))
+      (should (equal (ein:nbview--kernel-name nb) "python3")))))
 
 (provide 'test-ein-pyenv)
 ;;; test-ein-pyenv.el ends here

@@ -448,6 +448,27 @@ took the prefix of the text after the footer, none at the end)."
          (ein:nbview-clear-output)))
       (should-not (buffer-modified-p)))))
 
+(ert-deftest ein:nbview-output-image-native-scale ()
+  "Raster outputs keep their pixels instead of following the font size."
+  (let ((image-scaling-factor 2.0)
+        (out `(:output_type "display_data" :data (:image/png ,ein:testing-out-png))))
+    (should (= 1 (image-property
+                  (car (ein:testing-out-images
+                        (ein:nbview-render-output out '(:graphic t :window-width 1000))))
+                  :scale)))
+    (let ((ein:nbview-image-scale 1.5))
+      (should (= 1.5 (image-property
+                      (car (ein:testing-out-images
+                            (ein:nbview-render-output out '(:graphic t :window-width 1000))))
+                      :scale))))
+    (let ((ein:nbview-image-scale 'auto))
+      (should (= 2.0 (image-property
+                      (car (ein:testing-out-images
+                            (ein:nbview-render-output out '(:graphic t :window-width 1000))))
+                      :scale))))
+    (should (= 1 (image-property (ein:nbview-image (base64-decode-string ein:testing-out-png) 'png)
+                                 :scale)))))
+
 (provide 'test-ein-nbview-output)
 
 ;;; test-ein-nbview-output.el ends here

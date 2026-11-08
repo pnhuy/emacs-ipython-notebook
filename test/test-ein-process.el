@@ -115,8 +115,8 @@ without asking for a directory, and opens the file's path on it."
                     :type 'user-error))))
 
 (ert-deftest ein:process-new-notebook-file ()
-  "A missing or empty file becomes an empty notebook; a file with
-contents is never touched."
+  "A missing or empty file becomes a notebook with one empty code cell;
+a file with contents is never touched."
   (let* ((dir (make-temp-file "ein-new-" t))
          (new (expand-file-name "sub/new.ipynb" dir))
          (empty (expand-file-name "empty.ipynb" dir))
@@ -132,7 +132,12 @@ contents is never touched."
                                            (insert-file-contents f)
                                            (buffer-string)))))
               (should (= (gethash "nbformat" nb) 4))
-              (should (equal (gethash "cells" nb) []))))
+              (let ((cells (gethash "cells" nb)))
+                (should (= 1 (length cells)))
+                (should (equal "code" (gethash "cell_type" (aref cells 0))))
+                (should (equal "" (gethash "source" (aref cells 0))))
+                (should (string-match-p "\\`[0-9a-f]\\{8\\}\\'"
+                                        (gethash "id" (aref cells 0)))))))
           (should (equal (with-temp-buffer (insert-file-contents full) (buffer-string))
                          "not json")))
       (delete-directory dir t))))

@@ -179,17 +179,19 @@ When several do, the one with the deepest root."
              (length (file-name-as-directory (expand-file-name root)))))
 
 (defconst ein:process-empty-notebook
-  "{\n \"cells\": [],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 5\n}\n"
-  "Contents written to a new, empty notebook file.")
+  "{\n \"cells\": [\n  {\n   \"cell_type\": \"code\",\n   \"execution_count\": null,\n   \"id\": \"%s\",\n   \"metadata\": {},\n   \"outputs\": [],\n   \"source\": \"\"\n  }\n ],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 5\n}\n"
+  "Contents written to a new notebook file: one empty code cell.
+%s is the cell id.")
 
 (defun ein:process--ensure-notebook-file (filename)
-  "Give FILENAME the contents of an empty notebook when it has none.
+  "Give FILENAME the contents of a new notebook when it has none.
 Never touches a file that has contents."
   (unless (and (file-exists-p filename)
                (> (or (file-attribute-size (file-attributes filename)) 0) 0))
     (make-directory (file-name-directory filename) t)
     (let ((coding-system-for-write 'utf-8-unix))
-      (write-region ein:process-empty-notebook nil filename nil 'silent))))
+      (write-region (format ein:process-empty-notebook (format "%08x" (random #x100000000)))
+                    nil filename nil 'silent))))
 
 (defun ein:process--open (url-or-port path filename callback no-pop)
   "Open notebook PATH on URL-OR-PORT, for local FILENAME.
@@ -266,7 +268,7 @@ Pop to it when no window shows RAW."
 (defun ein:process-open-notebook (&optional filename buffer-callback)
   "Open FILENAME as a notebook.
 When FILENAME is unspecified the variable `buffer-file-name' is used
-instead.  A missing or empty FILENAME becomes a new, empty notebook.
+instead.  A missing or empty FILENAME becomes a new notebook.
 When the current buffer visits FILENAME, the notebook takes its
 windows.  BUFFER-CALLBACK is then called with that buffer."
   (interactive)
@@ -304,7 +306,7 @@ windows.  BUFFER-CALLBACK is then called with that buffer."
   "Open the notebook FILENAME, wherever it is.
 Like opening a notebook in VS Code: there is no root to choose and
 no notebook list.  A Jupyter server is started when none can open
-FILENAME.  A new file name creates an empty notebook."
+FILENAME.  A new file name creates a new notebook."
   (interactive
    (list (read-file-name "Open notebook: " nil nil nil nil
                          (lambda (f) (or (file-directory-p f)

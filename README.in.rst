@@ -104,7 +104,7 @@ Open any notebook the way you open any file:
   is shown in a window (set ``ein:ipynb-open-as-notebook`` to ``nil`` to see
   the JSON and press ``C-c C-o`` instead), or,
 * ``M-x ein:open`` reads a file name; a name that does not exist yet becomes
-  a new, empty notebook.
+  a new notebook with one empty code cell.
 
 There is no root folder to choose and no server to start by hand.  EIN starts
 one Jupyter server in the background, rooted at ``ein:jupyter-implicit-root``
@@ -258,6 +258,7 @@ Variable (default)                             Meaning
 ``ein:nbview-inline-images`` (``t``)           show image outputs inline
 ``ein:nbview-image-max-width`` (``0.9``)       fraction of the window, or pixels
 ``ein:nbview-image-max-height`` (``600``)      pixels
+``ein:nbview-image-scale`` (``1``)             ``1``: image pixels (sharp); ``auto``: font size
 ``ein:nbview-mime-priority``                   preferred output representations
 ``ein:nbview-output-max-lines`` (``200``)      longer outputs are truncated (``nil``: no limit)
 ``ein:nbview-output-coalesce-delay``           seconds to batch rapid outputs (0.05)

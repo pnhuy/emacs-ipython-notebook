@@ -69,6 +69,24 @@ A float is a fraction of the window width; an integer is pixels."
   :group 'ein-nbview
   :package-version '(ein . "0.18"))
 
+(defcustom ein:nbview-image-scale 1
+  "Scale of images in previews and outputs.
+1 shows images at their own pixel size, which keeps plots sharp.
+`auto' follows `image-scaling-factor', enlarging images with the font
+but blurring bitmaps.  For plots that are both large and sharp, ask
+Matplotlib for high-resolution images, e.g.
+%config InlineBackend.figure_formats = [\"retina\"]"
+  :type '(choice (const :tag "Follow `image-scaling-factor'" auto)
+                 (number :tag "Scale"))
+  :group 'ein-nbview
+  :package-version '(ein . "0.18"))
+
+(defun ein:nbview-image-scale ()
+  "The :scale for images, from `ein:nbview-image-scale'."
+  (if (numberp ein:nbview-image-scale)
+      ein:nbview-image-scale
+    (image-compute-scaling-factor image-scaling-factor)))
+
 (defcustom ein:nbview-remote-image-max-bytes (* 5 1024 1024)
   "Largest remote image a preview downloads, in bytes."
   :type 'natnum
@@ -657,7 +675,7 @@ Return nil when TYPE is not displayable."
   (when (and data (image-type-available-p type))
     (let ((size (ein:nbview-md--max-size)))
       (create-image data type t :max-width (car size) :max-height (cdr size)
-                    :ascent 'center))))
+                    :scale (ein:nbview-image-scale) :ascent 'center))))
 
 (defun ein:nbview-md--file-type (name)
   "Return the image type of the file NAME from its extension, or nil."

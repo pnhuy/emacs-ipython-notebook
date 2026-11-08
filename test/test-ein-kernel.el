@@ -222,6 +222,37 @@
         (funcall deliver (eintest:msg "iopub" "stream" id-2 '(:name "stdout" :text "new")))
         (should (equal got '("new" "late")))))))
 
+(ert-deftest ein:kernel-superseded-request-keeps-no-route ()
+  "A request that finishes after its cell ran again does not route output.
+Run A, run the same cell as B, then let A finish: A's late output must
+not land among B's results."
+  (eintest:with-live-kernel kernel _sent
+    (let* ((got '())
+           (owner (list 'cell))
+           (callbacks (lambda ()
+                        (list :output (cons (lambda (_ _type content _md)
+                                              (push (plist-get content :text) got))
+                                            owner)
+                              :execute_reply (cons #'ignore owner))))
+           (deliver (lambda (&rest msgs)
+                      (dolist (m msgs)
+                        (ein:kernel--handle-websocket-reply kernel nil (eintest:frame m)))))
+           (id-a (ein:kernel-execute kernel "a" (funcall callbacks)))
+           (id-b (ein:kernel-execute kernel "b" (funcall callbacks))))
+      (funcall deliver
+               (eintest:msg "shell" "execute_reply" id-a '(:status "ok" :execution_count 1))
+               (eintest:msg "iopub" "status" id-a '(:execution_state "idle")))
+      (eintest:capturing-logs _logs
+        (funcall deliver (eintest:msg "iopub" "stream" id-a '(:name "stdout" :text "stale"))))
+      (funcall deliver (eintest:msg "iopub" "stream" id-b '(:name "stdout" :text "new")))
+      (should (equal got '("new")))
+      ;; B, the latest, keeps its route once it finishes.
+      (funcall deliver
+               (eintest:msg "shell" "execute_reply" id-b '(:status "ok" :execution_count 2))
+               (eintest:msg "iopub" "status" id-b '(:execution_state "idle"))
+               (eintest:msg "iopub" "stream" id-b '(:name "stdout" :text "late")))
+      (should (equal got '("late" "new"))))))
+
 (ert-deftest ein:kernel-complete-request-and-reply ()
   "T112: `ein:kernel-complete' sends complete_request and dispatches its reply."
   (eintest:with-live-kernel kernel sent

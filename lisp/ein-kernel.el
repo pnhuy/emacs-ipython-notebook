@@ -329,7 +329,8 @@ See https://github.com/ipython/ipython/pull/3307"
 (defun ein:kernel--output-routes (kernel)
   "Output routes of KERNEL's finished requests: a cons of two tables.
 The car maps a msg-id to its `:output' and `:clear_output' callbacks;
-the cdr maps their owner (the cell) to that msg-id.  Kernels may send
+the cdr maps their owner (the cell) to its latest request's msg-id,
+pending or finished: only that request keeps a route.  Kernels may send
 output after the idle status (from background threads, say), so that
 output still reaches its cell, until the cell runs again."
   (or (ein:$kernel-output-routes kernel)
@@ -342,24 +343,24 @@ output still reaches its cell, until the cell runs again."
   (let ((output (plist-get callbacks :output)))
     (and (consp output) (cdr output))))
 
-(defun ein:kernel--forget-route (kernel owner)
-  "Forget the output route of OWNER's last finished request on KERNEL."
+(defun ein:kernel--set-latest (kernel owner msg-id)
+  "Make MSG-ID OWNER's latest request on KERNEL, ending older routes."
   (when owner
     (let* ((routes (ein:kernel--output-routes kernel))
            (old (gethash owner (cdr routes))))
       (when old
-        (remhash old (car routes))
-        (remhash owner (cdr routes))))))
+        (remhash old (car routes)))
+      (puthash owner msg-id (cdr routes)))))
 
 (defun ein:kernel--keep-route (kernel msg-id callbacks)
-  "Keep routing late output of the finished request MSG-ID to its owner."
+  "Keep routing late output of the finished request MSG-ID to its owner,
+unless the owner has run again since."
   (when-let* ((owner (ein:kernel--callbacks-owner callbacks)))
-    (ein:kernel--forget-route kernel owner)
     (let ((routes (ein:kernel--output-routes kernel)))
-      (puthash msg-id (list :output (plist-get callbacks :output)
-                            :clear_output (plist-get callbacks :clear_output))
-               (car routes))
-      (puthash owner msg-id (cdr routes)))))
+      (when (equal msg-id (gethash owner (cdr routes)))
+        (puthash msg-id (list :output (plist-get callbacks :output)
+                              :clear_output (plist-get callbacks :clear_output))
+                 (car routes))))))
 
 (defun ein:kernel--msg-done (kernel msg-id what)
   "Record that WHAT (`reply' or `idle') arrived for MSG-ID.
@@ -737,7 +738,7 @@ not start or that other sessions share; on refusal only disconnect."
 (defun ein:kernel-set-callbacks-for-msg (kernel msg-id callbacks)
   "Set up promise for MSG-ID.
 A new request of the same owner ends the route of its previous one."
-  (ein:kernel--forget-route kernel (ein:kernel--callbacks-owner callbacks))
+  (ein:kernel--set-latest kernel (ein:kernel--callbacks-owner callbacks) msg-id)
   (puthash msg-id callbacks (ein:$kernel-msg-callbacks kernel)))
 
 (defun ein:kernel--handle-stdin-reply (kernel packet)

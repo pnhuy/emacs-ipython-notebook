@@ -465,8 +465,7 @@ See `ein:format-time-string'."
            'link
            :notify (lambda (&rest _ignore)
                      (ein:notebooklist-open* url-or-port path nil
-                                             (lambda (buffer _url-or-port)
-                                               (pop-to-buffer buffer))))
+                                             #'ein:show-buffer))
            name)))
       (widget-insert " |\n\n"))
     (let* ((url-or-port url-or-port)
@@ -546,7 +545,7 @@ See `ein:format-time-string'."
                                                                      (ein:$notebooklist-path ein:%notebooklist%))
                                                                     name)
                                                             nil
-                                                            (lambda (buffer _url-or-port) (pop-to-buffer buffer)))))
+                                                            #'ein:show-buffer)))
                         "Dir")
                        (widget-insert " : " name)
                        (widget-insert "\n"))
@@ -734,8 +733,7 @@ URL-OR-PORT's own cookie and those of running servers."
 ;;;###autoload
 (defun ein:notebooklist-open (url-or-port callback)
   "This is now an alias for `ein:notebooklist-login'."
-  (interactive `(,(ein:notebooklist-ask-url-or-port)
-                 ,(lambda (buffer _url-or-port) (pop-to-buffer buffer))))
+  (interactive `(,(ein:notebooklist-ask-url-or-port) ein:show-buffer))
   (ein:notebooklist-login url-or-port callback))
 
 (make-obsolete 'ein:notebooklist-open 'ein:notebooklist-login "0.14.2")
@@ -750,7 +748,7 @@ CALLBACK takes two arguments, the buffer created by
 ein:notebooklist-open--success and the url-or-port argument of
 ein:notebooklist-open*."
   (interactive `(,(ein:notebooklist-ask-url-or-port)
-                 ,(lambda (buffer _url-or-port) (pop-to-buffer buffer))
+                 ein:show-buffer
                  ,(when current-prefix-arg
                     (read-no-blanks-input "Cookie name: "))
                  ,(when current-prefix-arg

@@ -248,7 +248,7 @@ to CALLBACK."
                       (cl-subseq (expand-file-name filename)
                                  (length (file-name-as-directory (expand-file-name nbdir))))))
              (callback2 (apply-partially (lambda (path* callback* buffer url-or-port)
-                                           (pop-to-buffer buffer)
+                                           (ein:show-buffer buffer)
                                            (ein:notebook-open url-or-port
                                                               path* nil callback*))
                                          path callback)))
@@ -257,13 +257,13 @@ to CALLBACK."
 
 (defun ein:process--show-notebook (raw notebook)
   "Show NOTEBOOK in the windows showing RAW, the buffer visiting its file.
-Pop to it when no window shows RAW."
+Show it in the selected window when no window shows RAW."
   (let ((buffer (ein:notebook-buffer notebook))
         (windows (and (buffer-live-p raw) (get-buffer-window-list raw nil t))))
     (if windows
         (dolist (window windows)
           (set-window-buffer window buffer))
-      (pop-to-buffer buffer))))
+      (ein:show-buffer buffer))))
 
 (defun ein:process-open-notebook (&optional filename buffer-callback)
   "Open FILENAME as a notebook.

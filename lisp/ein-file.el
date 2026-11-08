@@ -56,7 +56,7 @@
     (ein:log 'verbose "Opened file %s" (ein:$content-name content))
     (set-buffer-modified-p nil)
     (goto-char (point-min))
-    (pop-to-buffer (buffer-name))))
+    (ein:show-buffer (current-buffer))))
 
 (defun ein:content-file-save ()
   (setf (ein:$content-raw-content ein:content-file-buffer--content) (buffer-string))

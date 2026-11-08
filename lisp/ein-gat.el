@@ -200,7 +200,7 @@
 	(setf (alist-get (intern url-or-port) ein:gat-urls) notebook-dir)
 	(ein:login url-or-port
 		   (lambda (buffer url-or-port)
-                     (pop-to-buffer buffer)
+                     (ein:show-buffer buffer)
                      (ein:notebook-open url-or-port ipynb-name nil callback))))
     (ein:log 'error "ein:gat-jupyter-login: no public ip address")))
 

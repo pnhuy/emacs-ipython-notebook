@@ -475,8 +475,7 @@ server command."
                            default-dir default-dir t)))
            result)
          nil
-         (lambda (buffer _url-or-port)
-           (pop-to-buffer buffer))
+         #'ein:show-buffer
          nil))
   (when (ein:jupyter-server-process)
     (error "ein:jupyter-server-start: First `M-x ein:stop'"))

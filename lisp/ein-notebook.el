@@ -208,7 +208,7 @@ no kernel gets the server's default kernel."
 (defun ein:notebook-open--decorate-callback (notebook existing pending-clear callback no-pop)
   "In addition to CALLBACK,
 clear the pending semaphore,
-pop-to-buffer the new notebook,
+show the new notebook in the selected window,
 save to disk the kernelspec metadata,
 reload the notebooklist so that \"[Stop]\" shows up,
 and put last warning in minibuffer."
@@ -224,8 +224,8 @@ and put last warning in minibuffer."
          (if (bound-and-true-p pm/polymode)
              (progn
                (pm-select-buffer (pm-innermost-span))
-               (pop-to-buffer (pm-span-buffer (pm-innermost-span))))
-           (pop-to-buffer (current-buffer)))))
+               (ein:show-buffer (pm-span-buffer (pm-innermost-span))))
+           (ein:show-buffer (current-buffer)))))
      ;; Record the kernel in metadata for the next save, but never
      ;; write to the server merely because the notebook was opened.
      (when (null (plist-member (ein:$notebook-metadata notebook*) :kernelspec))

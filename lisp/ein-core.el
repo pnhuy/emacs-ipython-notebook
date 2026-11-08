@@ -143,6 +143,13 @@ but can operate in different contexts."
         if (and (functionp func) (funcall func))
         return it))
 
+(defun ein:show-buffer (buffer &rest _)
+  "Show BUFFER in the selected window and select it, as `find-file' does.
+For the notebook list, notebooks and files: they open full instead of
+splitting the frame.  The rest of the arguments are ignored, so this
+also serves as a notebook list callback."
+  (pop-to-buffer-same-window buffer))
+
 (defun ein:get-url-or-port ()
   (ein:generic-getter '(ein:get-url-or-port--notebooklist
                         ein:get-url-or-port--notebook

@@ -40,6 +40,7 @@
 (require 'subr-x)
 (require 'json)
 (require 'ein-core)
+(require 'ein-log)
 (require 'ein-classes)
 
 (declare-function ein:query-kernelspecs "ein-query")

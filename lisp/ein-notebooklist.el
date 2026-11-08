@@ -664,6 +664,44 @@ or even this (if you want fast Emacs start-up):
 
 ;;; Login
 
+(defconst ein:notebooklist--loopback-hosts '("127.0.0.1" "localhost" "::1" "[::1]")
+  "Hosts whose jupyter servers `jupyter server list' can see.")
+
+(defun ein:notebooklist-login--prune-cookies (url-or-port)
+  "Drop login cookies of local servers that no longer run.
+Jupyter sets a persistent cookie named username-HOST-PORT for each
+server.  Cookies ignore the port, so every server ever started on
+the same host adds one to all later requests.  Past about twenty,
+curl's 8 KB limit on the Cookie header drops the _xsrf cookie
+and logins fail with 403.  Only loopback hosts are pruned, keeping
+URL-OR-PORT's own cookie and those of running servers."
+  (let* ((parsed (url-generic-parse-url (ein:url url-or-port)))
+         (host (url-host parsed))
+         (jar (request--curl-cookie-jar))
+         (cookie-re (concat "^\\(?:#HttpOnly_\\)?" (regexp-quote (or host ""))
+                            "\t\\(?:[^\t\n]*\t\\)\\{4\\}username-[^\t\n]*-\\([0-9]+\\)\t")))
+    (when (and host (member host ein:notebooklist--loopback-hosts)
+               (file-readable-p jar))
+      (with-temp-buffer
+        (insert-file-contents jar)
+        (goto-char (point-min))
+        (when (re-search-forward cookie-re nil t)
+          (let ((live (cons (url-port parsed)
+                            (and (fboundp 'ein:jupyter-crib-running-servers)
+                                 (delq nil (mapcar (lambda (s) (plist-get s :port))
+                                                   (ignore-errors
+                                                     (ein:jupyter-crib-running-servers)))))))
+                pruned)
+            (goto-char (point-min))
+            (while (re-search-forward cookie-re nil t)
+              (unless (memql (string-to-number (match-string 1)) live)
+                (delete-region (line-beginning-position)
+                               (min (point-max) (1+ (line-end-position))))
+                (setq pruned t)))
+            (when pruned
+              (let ((coding-system-for-write 'utf-8-unix))
+                (write-region nil nil jar nil 'silent)))))))))
+
 (defun ein:notebooklist-login--iteration (url-or-port callback errback token iteration response-status)
   (when (stringp token)
     (ein:log--register-secret token))
@@ -679,7 +717,8 @@ or even this (if you want fast Emacs start-up):
          (host (url-host parsed-url))
          (query (cdr (url-path-and-query parsed-url))))
     (when reset-p
-      (remhash host ein:query-xsrf-cache))
+      (remhash host ein:query-xsrf-cache)
+      (ein:notebooklist-login--prune-cookies url-or-port))
     (ein:query-singleton-ajax
      (ein:url url-or-port (if query "" "login"))
      ;; do not use :type "POST" here (see git history)

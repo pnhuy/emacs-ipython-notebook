@@ -39,6 +39,38 @@
                                     (search-forward text nil t)))))
            (buffer-list)))
 
+(ert-deftest ein:integration-token-login-survives-stale-login-cookies ()
+  "Login cookies of servers that are gone must not cause a 403.
+Each jupyter server leaves a persistent username-HOST-PORT cookie
+and cookies ignore the port.  With enough of them, curl's limit on
+the Cookie header drops _xsrf and the server answers 403."
+  :tags '(:integration)
+  (ein:testing-with-server (url token)
+    (let ((ein:jupyter-server-use-subcommand "server")
+          (host (url-host (url-generic-parse-url url)))
+          (expiry (number-to-string (+ (truncate (float-time)) 86400)))
+          logged failed)
+      (with-temp-buffer
+        (dotimes (i 30)
+          (insert (mapconcat
+                   #'identity
+                   (list (concat "#HttpOnly_" host) "FALSE" "/" "FALSE" expiry
+                         (format "username-%s-%d"
+                                 (replace-regexp-in-string "[.:]" "-" host)
+                                 (+ 1 i))
+                         (concat "2|1:0|10:1700000000|" (make-string 320 ?a)))
+                   "\t")
+                  "\n"))
+        (write-region (point-min) (point-max) (request--curl-cookie-jar) 'append))
+      (clrhash ein:query-xsrf-cache)
+      (ein:notebooklist-login url (lambda (&rest _) (setq logged t))
+                              nil nil token)
+      (cl-letf (((symbol-function 'ein:notebooklist-login--error-1)
+                 (lambda (&rest _) (setq failed t))))
+        (should (ein:testing-wait-until (lambda () (or logged failed)) 20)))
+      (should-not failed)
+      (should logged))))
+
 (ert-deftest ein:integration-password-login ()
   :tags '(:integration)
   (ein:testing-with-server (url _token :password "ein-pw")

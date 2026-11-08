@@ -226,7 +226,7 @@ Return nil when COMMAND is missing or fails."
 (defvar-local ein:jupyter-server-notebook-directory nil
   "Keep track of prevailing --notebook-dir argument.")
 
-(defsubst ein:jupyter-server-process ()
+(defun ein:jupyter-server-process ()
   "Return the emacs process object of our session."
   (get-buffer-process (get-buffer *ein:jupyter-server-buffer-name*)))
 

@@ -22,6 +22,10 @@
 
 ;;; Commentary:
 
+(require 'ein-core)
+(require 'ein-classes)
+(require 'ein-log)
+
 (defvar *ein:file-buffername-template* "'/ein:%s:%s")
 (ein:deflocal ein:content-file-buffer--content nil)
 

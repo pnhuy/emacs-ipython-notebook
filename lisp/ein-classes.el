@@ -24,6 +24,20 @@
 ;;; Content
 (require 'eieio)
 
+(defmacro ein:oset-if-empty (obj slot value)
+  "Set the slot if it is not set or nil.
+WARNING: OBJ and SLOT are evaluated multiple times,
+  only use symbols/variables."
+  `(unless (and (slot-boundp ,obj ,slot) (slot-value ,obj ,slot))
+     (setf (slot-value ,obj, slot) ,value)))
+
+(defmacro ein:oref-safe (obj slot)
+  "Slot value if bound or nil.
+WARNING: OBJ and SLOT are evaluated multiple times,
+  only use symbols/variables."
+  `(and (slot-boundp ,obj ,slot)
+        (slot-value ,obj ,slot)))
+
 (cl-defstruct ein:$content
   "Content returned from the Jupyter notebook server:
 `ein:$content-url-or-port'

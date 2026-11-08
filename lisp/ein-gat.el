@@ -25,6 +25,8 @@
 
 (require 'compile)
 (require 'seq)
+(require 'dash)
+(require 'ein-log)
 (require 'magit-process nil t)
 (autoload 'ein:jupyter-running-notebook-directory "ein-jupyter")
 

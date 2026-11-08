@@ -29,6 +29,9 @@
 ;;; Code:
 
 (require 'eieio)
+(require 'ein-utils)
+(require 'ein-classes)
+(require 'ein-log)
 
 (defclass ein:shared-output-cell (ein:codecell)
   ((cell-type :initarg :cell-type :initform "shared-output")

@@ -31,6 +31,9 @@
 (require 'url)
 (require 'deferred)
 
+;; ein-log requires this file, so call `ein:log''s function directly.
+(declare-function ein:log-wrapper "ein-log")
+
 (make-obsolete-variable 'ein:enable-gc-adjust nil "0.17.0")
 
 ;;; Macros and core functions/variables
@@ -621,7 +624,7 @@ and \\[keyboard-quit] still interrupts."
   "Wait until PREDICATE function returns non-`nil'.
 PREDARGS is argument list for the PREDICATE function.
 Make TIMEOUT-SECONDS larger \(default 5) to wait longer before timeout."
-  (ein:log 'debug "WAIT-UNTIL start")
+  (ein:log-wrapper 'debug (lambda () "WAIT-UNTIL start"))
   (unless timeout-seconds (setq timeout-seconds 5))
   (unless (cl-loop repeat (/ timeout-seconds 0.05)
                 when (apply predicate predargs)
@@ -630,7 +633,7 @@ Make TIMEOUT-SECONDS larger \(default 5) to wait longer before timeout."
                 do (sit-for 0.05)
                 do (sleep-for 0.05))
     (warn "Timeout"))
-  (ein:log 'debug "WAIT-UNTIL end"))
+  (ein:log-wrapper 'debug (lambda () "WAIT-UNTIL end")))
 
 (defun ein:format-time-string (format time)
   "Apply format to time.

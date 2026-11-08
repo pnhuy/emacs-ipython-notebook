@@ -31,6 +31,9 @@
 (require 'anaphora)
 (require 'request)
 
+;; ein-log requires this file, so call `ein:log''s function directly.
+(declare-function ein:log-wrapper "ein-log")
+
 (defgroup ein nil
   "IPython notebook client in Emacs"
   :group 'applications
@@ -109,7 +112,7 @@ the source is in git repository) or elpa version."
 (defun ein:need-kernelspecs (url-or-port)
   "Callers assume ein:query-kernelspecs succeeded.  If not, nil."
   (aif (gethash url-or-port *ein:kernelspecs*) it
-    (ein:log 'warn "No recorded kernelspecs for %s" url-or-port)
+    (ein:log-wrapper 'warn (lambda () (format "No recorded kernelspecs for %s" url-or-port)))
     nil))
 
 (defsubst ein:notebook-api-version-numeric (url-or-port)
@@ -119,7 +122,7 @@ the source is in git repository) or elpa version."
   "Callers assume `ein:query-notebook-api-version' succeeded.
 If not, we hardcode a guess."
   (aif (gethash url-or-port *ein:notebook-api-version*) it
-    (ein:log 'warn "No recorded notebook version for %s" url-or-port)
+    (ein:log-wrapper 'warn (lambda () (format "No recorded notebook version for %s" url-or-port)))
     "5"))
 
 (defun ein:generic-getter (func-list)

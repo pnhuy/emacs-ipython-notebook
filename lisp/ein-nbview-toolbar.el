@@ -242,7 +242,8 @@ Notebook and kernel messages follow; they may be cut off."
   "Non-nil when CELL's header shows the cell toolbar."
   (and ein:nbview-cell-toolbar
        (when-let* ((view (ein:oref-safe cell 'view)))
-         (or (eq (ein:oref-safe view 'selected) cell)
+         ;; ein-nbview.el, which requires this file, defines `selected'.
+         (or (eq (with-no-warnings (ein:oref-safe view 'selected)) cell)
              (and ein:nbview-toolbar-on-hover
                   (buffer-live-p (ein:oref-safe view 'buffer))
                   (eq (buffer-local-value 'ein:nbview--hovered (oref view buffer))

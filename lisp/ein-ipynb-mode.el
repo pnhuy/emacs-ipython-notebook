@@ -26,8 +26,15 @@
 
 ;;; Code:
 
-(require 'ein-process)
 (require 'js)
+
+;; Visiting an ipynb file (a `consult' preview does that too) must stay
+;; cheap: the rest of EIN loads when the file is opened as a notebook.
+(autoload 'ein:process-open-notebook "ein-process")
+(autoload 'ein:process-find-file-callback "ein-process"
+  "Open this ipynb file as a notebook." t)
+(autoload 'ein:gat-run-remote "ein-gat"
+  "Run this notebook remotely." t)
 
 (defcustom ein:ipynb-open-as-notebook t
   "Non-nil means visiting an ipynb file opens it as a notebook.
@@ -117,9 +124,9 @@ previews while the minibuffer is active do not start servers.  Use
   (define-key map "\C-c\C-o" 'ein:process-find-file-callback)
   (define-key map "\C-c\C-r" 'ein:gat-run-remote)
   (easy-menu-define ein:ipynb-menu map "EIN IPyNB Mode Menu"
-    `("EIN IPyNB File"
-      ,@(ein:generate-menu
-         '(("Open notebook" ein:process-find-file-callback))))))
+    '("EIN IPyNB File"
+      ["Open notebook" ein:process-find-file-callback
+       :help "Open this ipynb file as a notebook."])))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.ipynb\\'" . ein:ipynb-mode))

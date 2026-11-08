@@ -156,6 +156,10 @@ When several do, the one with the deepest root."
         (setq best dir)))
     (and best (gethash best ein:%processes%))))
 
+(defsubst ein:process-url-or-port (proc)
+  "Naively construct url-or-port from ein:process PROC's port and ip fields"
+  (ein:$process-url proc))
+
 (defun ein:process-url-match (url-or-port)
   "Return ein:process whose url matches URL-OR-PORT."
   (cl-loop with parsed-url-or-port = (url-generic-parse-url url-or-port)
@@ -164,10 +168,6 @@ When several do, the one with the deepest root."
         when (and (string= (url-host parsed-url-or-port) (url-host parsed-url-proc))
                   (= (url-port parsed-url-or-port) (url-port parsed-url-proc)))
         return proc))
-
-(defsubst ein:process-url-or-port (proc)
-  "Naively construct url-or-port from ein:process PROC's port and ip fields"
-  (ein:$process-url proc))
 
 (defsubst ein:process-path (proc filename)
   "Construct path by eliding PROC's dir from filename."

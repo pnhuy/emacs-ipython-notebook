@@ -66,5 +66,27 @@
       (ein:ipynb--open buffer)
       (should (buffer-live-p buffer)))))
 
+(ert-deftest ein:ipynb-visiting-loads-little ()
+  "Visiting an ipynb file, as a `consult' preview does, stays cheap.
+The rest of EIN loads only once the file is opened as a notebook."
+  (let* ((file (make-temp-file "ein-ipynb-" nil ".ipynb" "{}"))
+         (form `(progn
+                  (setq load-path ',load-path)
+                  (require 'ein-ipynb-mode)
+                  (with-current-buffer (find-file-noselect ,file)
+                    (princ (format "%s %s %s %s" major-mode
+                                   (featurep 'ein-process)
+                                   (featurep 'ein-core)
+                                   (commandp 'ein:process-find-file-callback))))))
+         (output (unwind-protect
+                     (with-temp-buffer
+                       (call-process (expand-file-name invocation-name
+                                                       invocation-directory)
+                                     nil t nil "-Q" "--batch" "--eval"
+                                     (prin1-to-string form))
+                       (buffer-string))
+                   (delete-file file))))
+    (should (string-match-p "ein:ipynb-mode nil nil t\\'" output))))
+
 (provide 'test-ein-ipynb-mode)
 ;;; test-ein-ipynb-mode.el ends here

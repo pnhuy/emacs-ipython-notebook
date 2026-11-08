@@ -178,20 +178,6 @@ Nil lets the server choose (8888, or the next free port)."
 With a broad root, notebooks under dot directories (~/.cache, a
 project's .venv) are ordinary files, not hidden ones.")
 
-(defun ein:jupyter--implicit-server-url-p (url-or-port)
-  "Non-nil when URL-OR-PORT is our server rooted at `ein:jupyter-implicit-root'."
-  (when-let* ((proc (ein:jupyter-server-process))
-              (dir (ein:jupyter-running-notebook-directory)))
-    (and (equal (file-name-as-directory (expand-file-name dir))
-                (file-name-as-directory (expand-file-name ein:jupyter-implicit-root)))
-         (let ((url (or (process-get proc 'ein-url)
-                        (let ((found (ein:jupyter-my-url-or-port)))
-                          (process-put proc 'ein-url found)
-                          found))))
-           (and url (equal (ein:url url-or-port) (ein:url url)))))))
-
-(add-hook 'ein:content-hierarchy-skip-functions #'ein:jupyter--implicit-server-url-p)
-
 (defun ein:jupyter--process-environment ()
   "`process-environment' for a server EIN starts.
 Puts `ein:pyenv-data-directory' first on JUPYTER_PATH."
@@ -240,6 +226,10 @@ Return nil when COMMAND is missing or fails."
 (defvar-local ein:jupyter-server-notebook-directory nil
   "Keep track of prevailing --notebook-dir argument.")
 
+(defsubst ein:jupyter-server-process ()
+  "Return the emacs process object of our session."
+  (get-buffer-process (get-buffer *ein:jupyter-server-buffer-name*)))
+
 (defun ein:jupyter-running-notebook-directory ()
   (when (ein:jupyter-server-process)
     (buffer-local-value 'ein:jupyter-server-notebook-directory
@@ -278,9 +268,19 @@ with `kubectl exec'."
     (prog1 nil
       (ein:log 'warn "ein:jupyter-process-lines: cannot find %s" command))))
 
-(defsubst ein:jupyter-server-process ()
-  "Return the emacs process object of our session."
-  (get-buffer-process (get-buffer *ein:jupyter-server-buffer-name*)))
+(defun ein:jupyter--implicit-server-url-p (url-or-port)
+  "Non-nil when URL-OR-PORT is our server rooted at `ein:jupyter-implicit-root'."
+  (when-let* ((proc (ein:jupyter-server-process))
+              (dir (ein:jupyter-running-notebook-directory)))
+    (and (equal (file-name-as-directory (expand-file-name dir))
+                (file-name-as-directory (expand-file-name ein:jupyter-implicit-root)))
+         (let ((url (or (process-get proc 'ein-url)
+                        (let ((found (ein:jupyter-my-url-or-port)))
+                          (process-put proc 'ein-url found)
+                          found))))
+           (and url (equal (ein:url url-or-port) (ein:url url)))))))
+
+(add-hook 'ein:content-hierarchy-skip-functions #'ein:jupyter--implicit-server-url-p)
 
 (defun ein:jupyter-server--run (buf user-cmd dir &optional args)
   (get-buffer-create buf)

@@ -707,13 +707,13 @@ without edits reproduces it (contracts/notebook-roundtrip.md G2-G9)."
                     (plist-get (ein:$notebook-raw notebook) :metadata)))
       (cells . ,(apply #'vector all-cells)))))
 
-(defun ein:notebook--edit-ticks (notebook)
-  "Alist of each worksheet of NOTEBOOK and the text edit tick of its buffer."
-  (mapcar (lambda (ws)
-            (cons ws (let ((buffer (ein:worksheet-buffer ws)))
-                       (and (buffer-live-p buffer)
-                            (buffer-chars-modified-tick buffer)))))
-          (ein:$notebook-worksheets notebook)))
+(defun ein:notebook--unchanged-since-p (notebook saved)
+  "Non-nil if NOTEBOOK still serializes to SAVED, the copy sent to the server.
+This covers sources, outputs, execution counts and metadata, which can
+change without changing buffer text (outputs, in the cell view)."
+  (condition-case nil
+      (equal saved (append (ein:notebook-to-json notebook) nil))
+    (error nil)))
 
 (defun ein:notebook--save-finished (notebook)
   "Note that the save of NOTEBOOK in flight ended; run the saves queued since.
@@ -750,8 +750,7 @@ flight runs once that one ends, so that the server keeps the latest edits."
                       (error-message-string err))))
     ;; Build (and encode) the body before any request: a notebook that
     ;; cannot be encoded signals here and stays modified (T069).
-    (let ((content (ein:content-from-notebook notebook))
-          (ticks (ein:notebook--edit-ticks notebook)))
+    (let ((content (ein:content-from-notebook notebook)))
       (ein:content-to-json content)
       (setf (ein:$notebook-saving notebook) t)
       (condition-case err
@@ -766,7 +765,9 @@ flight runs once that one ends, so that the server keeps the latest edits."
                                        (ein:$content-last-modified content))
                                  (unwind-protect
                                      (apply #'ein:notebook-save-notebook-success
-                                            (car args) ticks (cdr args))
+                                            (car args)
+                                            (ein:$content-raw-content content)
+                                            (cdr args))
                                    (ein:notebook--save-finished notebook)))
                                (list notebook callback cbargs)
                                (lambda (&rest args)
@@ -853,23 +854,16 @@ the server cannot be reached (saving could not reach it either)."
   (interactive)
   (ein:notebook-save-notebook ein:%notebook%))
 
-(defun ein:notebook-save-notebook-success (notebook &optional ticks callback cbargs)
+(defun ein:notebook-save-notebook-success (notebook &optional saved callback cbargs)
   "Mark NOTEBOOK saved, then call CALLBACK with CBARGS.
-TICKS, from `ein:notebook--edit-ticks' when the saved copy was taken,
-leaves modified each worksheet edited since: the server lacks those edits."
+SAVED, the content the server acknowledged, leaves NOTEBOOK modified
+when it changed since that copy was taken: the server lacks the change."
   (ein:log 'verbose "Notebook is saved.")
-  (let ((unchanged t))
-    (mapc (lambda (ws)
-            (let ((tick (assq ws ticks))
-                  (buffer (ein:worksheet-buffer ws)))
-              (if (and tick (buffer-live-p buffer)
-                       (not (eql (cdr tick) (buffer-chars-modified-tick buffer))))
-                  (setq unchanged nil)
-                (ein:worksheet-save-cells ws) ; [#]_
-                (ein:worksheet-set-modified-p ws nil))))
-          (ein:$notebook-worksheets notebook))
-    (when unchanged
-      (setf (ein:$notebook-dirty notebook) nil)))
+  (when (or (null saved) (ein:notebook--unchanged-since-p notebook saved))
+    (dolist (ws (ein:$notebook-worksheets notebook))
+      (ein:worksheet-save-cells ws) ; [#]_
+      (ein:worksheet-set-modified-p ws nil))
+    (setf (ein:$notebook-dirty notebook) nil))
   (ein:events-trigger (ein:$notebook-events notebook)
                       'notebook_saved.Notebook)
   (when callback

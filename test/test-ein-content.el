@@ -39,6 +39,7 @@
 
 (require 'ein-testing-notebook)
 (require 'ein-testing-nbformat)
+(require 'ein-nbview)
 
 (defvar eintest:save-requests nil
   "List of (TYPE URL SETTINGS) sent by `ein:query-singleton-ajax', newest first.")
@@ -186,6 +187,33 @@ the request and does not call back (the test drives the callbacks)."
       (ein:notebook-save-notebook ein:%notebook%)
       (eintest:save-succeed (car (eintest:save-puts)) "t3")
       (should-not (ein:notebook-modified-p ein:%notebook%)))))
+
+(ert-deftest ein:content-save-keeps-execution-results-made-while-saving ()
+  "Output and a count arriving while the save is in flight stay modified.
+In the cell view they change no buffer text, yet the server lacks them."
+  (let ((ein:notebook-view 'cells))
+    (eintest:with-dirty-notebook
+      (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+      (eintest:with-save-stub "t1"
+        (let ((cell (cl-find-if #'ein:codecell-p (ein:view-cells ein:nbview--view))))
+          (ein:notebook-save-notebook ein:%notebook%)
+          (let ((put (car (eintest:save-puts)))
+                (tick (buffer-chars-modified-tick)))
+            (ein:cell--handle-output cell "stream" '(:name "stdout" :text "late\n") nil)
+            (ein:cell--handle-execute-reply cell '(:execution_count 99 :status "ok") nil)
+            (should (= tick (buffer-chars-modified-tick)))
+            (should (ein:notebook-modified-p ein:%notebook%))
+            (eintest:save-succeed put "t2"))
+          (should (ein:notebook-modified-p ein:%notebook%))
+          ;; Saving again sends them and then clears modified.
+          (setq eintest:save-requests nil)
+          (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+          (ein:notebook-save-notebook ein:%notebook%)
+          (let ((put (car (eintest:save-puts))))
+            (should (string-match-p "\"execution_count\": *99" (eintest:save-body put)))
+            (should (string-match-p "late" (eintest:save-body put)))
+            (eintest:save-succeed put "t3"))
+          (should-not (ein:notebook-modified-p ein:%notebook%)))))))
 
 (ert-deftest ein:content-save-serializes-overlapping-saves ()
   "A save asked for during another waits for it, keeping its callback."

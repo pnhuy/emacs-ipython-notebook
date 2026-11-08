@@ -45,9 +45,9 @@
 
 (defmacro eintest:with-save-stub (server-last-modified &rest body)
   "Run BODY with HTTP stubbed.
-GET returns SERVER-LAST-MODIFIED, or fails when that is `:fail'; PUT
-records the request and does not call back (the test drives the
-callbacks)."
+GET returns SERVER-LAST-MODIFIED, fails with HTTP 500 when that is
+`:fail', or without a response when it is `:unreachable'; PUT records
+the request and does not call back (the test drives the callbacks)."
   (declare (indent 1))
   `(let ((eintest:save-requests nil))
      (cl-letf (((symbol-function 'ein:query-singleton-ajax)
@@ -55,11 +55,15 @@ callbacks)."
                   (let ((type (plist-get settings :type)))
                     (push (list type url settings) eintest:save-requests)
                     (when (equal type "GET")
-                      (if (eq ,server-last-modified :fail)
-                          (funcall (plist-get settings :error)
-                                   :symbol-status 'error)
-                        (funcall (plist-get settings :success)
-                                 :data (list :last_modified ,server-last-modified))))))))
+                      (pcase ,server-last-modified
+                        (:fail (funcall (plist-get settings :error)
+                                        :symbol-status 'error
+                                        :response (make-request-response :status-code 500)))
+                        (:unreachable (funcall (plist-get settings :error)
+                                               :symbol-status 'error
+                                               :response (make-request-response)))
+                        (modified (funcall (plist-get settings :success)
+                                           :data (list :last_modified modified)))))))))
        ,@body)))
 
 (defun eintest:save-puts ()
@@ -221,6 +225,23 @@ callbacks)."
           (eintest:with-save-stub :fail
             (ein:notebook-save-notebook ein:%notebook%)
             (should (= 1 (length (eintest:save-puts))))))))))
+
+(ert-deftest ein:content-save-unreachable-server-fails ()
+  "When the server cannot be reached, the save fails without asking:
+the PUT could not reach it either."
+  (eintest:with-dirty-notebook
+    (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+    (let (messages failed)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) messages)))
+                ((symbol-function 'yes-or-no-p) (lambda (_p) (ert-fail "Asked"))))
+        (eintest:with-save-stub :unreachable
+          (ein:notebook-save-notebook ein:%notebook% nil nil (lambda () (setq failed t)))
+          (should-not (eintest:save-puts))))
+      (should failed)
+      (should (cl-some (lambda (m) (string-match-p "retry with C-x C-s" m)) messages))
+      (should (ein:notebook-modified-p ein:%notebook%))
+      (should-not (ein:$notebook-saving ein:%notebook%)))))
 
 ;;; Save copy
 

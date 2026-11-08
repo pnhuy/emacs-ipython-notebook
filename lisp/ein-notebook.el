@@ -775,7 +775,11 @@ flight runs once that one ends, so that the server keeps the latest edits."
                                    (ein:notebook--save-finished notebook)))
                                (list notebook errback)))
            ;; Declined by the user: do not ask again for a queued save.
-           (lambda () (setf (ein:$notebook-saving notebook) nil)))
+           (lambda () (setf (ein:$notebook-saving notebook) nil))
+           (lambda (reason)
+             (unwind-protect
+                 (ein:notebook-save-notebook-error notebook errback :reason reason)
+               (ein:notebook--save-finished notebook))))
         (error (setf (ein:$notebook-saving notebook) nil)
                (signal (car err) (cdr err)))))))
 
@@ -803,12 +807,13 @@ Return `overwrite', `reload' or `cancel'."
       (ein:notebook-close notebook
                           (lambda () (ein:notebook-open url-or-port path))))))
 
-(defun ein:notebook--check-conflict (notebook proceed &optional abort)
+(defun ein:notebook--check-conflict (notebook proceed &optional abort fail)
   "Call PROCEED unless NOTEBOOK changed on the server and the user declines.
 Compares the server's `last_modified' with the value recorded at open
 or at the last save (T070).  Without a recorded value, just PROCEED.
-When the server cannot be asked, ask the user before overwriting.
-Call ABORT, if given, when not proceeding."
+When the server answers with an error, ask the user before overwriting.
+Call ABORT, if given, when not proceeding, or FAIL with a reason when
+the server cannot be reached (saving could not reach it either)."
   (let ((recorded (ein:$notebook-last-modified notebook))
         (decline (lambda (fmt &rest args)
                    (apply #'message fmt args)
@@ -820,6 +825,10 @@ Call ABORT, if given, when not proceeding."
        (ein:$notebook-notebook-path notebook)
        (lambda (current)
          (cond
+          ((eq current :unreachable)
+           (if fail
+               (funcall fail "server unreachable")
+             (funcall decline "Server unreachable; notebook still modified")))
           ((eq current :error)
            (if (ein:notebook--confirm-unverified notebook)
                (funcall proceed)

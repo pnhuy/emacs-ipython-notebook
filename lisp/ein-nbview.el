@@ -199,6 +199,27 @@
 (defconst ein:nbview--rule-margin 2
   "Columns left free at the right end of the cell rules.")
 
+(defun ein:nbview--max-chars (window)
+  "Return `window-max-chars-per-line' of WINDOW, minding line numbers.
+That subtracts the line number width of the last redisplay, also when
+line numbers were just turned off: then add it back."
+  (+ (window-max-chars-per-line window)
+     (if (buffer-local-value 'display-line-numbers (window-buffer window))
+         0
+       (with-selected-window window
+         (ceiling (line-number-display-width 'columns))))))
+
+(defun ein:nbview--line-numbers-changed ()
+  "Redraw the rules for line numbers turned on or off.
+Again once idle: only redisplay updates the width of line numbers."
+  (ein:nbview--window-changed)
+  (let ((buffer (current-buffer)))
+    (run-with-idle-timer 0 nil
+                         (lambda ()
+                           (when (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (ein:nbview--window-changed)))))))
+
 (defun ein:nbview--line-metrics ()
   "Return (AVAIL . MEASURE) for one cell line of the current buffer.
 MEASURE returns the displayed width of a string and AVAIL is the width
@@ -213,7 +234,7 @@ without a window, widths are columns."
                       (lambda (s) (string-pixel-width s buf))
                     #'string-width))
          (unit (if graphic (window-font-width w) 1)))
-    (cons (- (* unit (- (if w (window-max-chars-per-line w) 80)
+    (cons (- (* unit (- (if w (ein:nbview--max-chars w) 80)
                         ein:nbview--rule-margin))
              (funcall measure (ein:nbview--bar 'ein:nbview-cell-bar)))
           measure)))
@@ -1514,6 +1535,7 @@ BUFFER defaults to the current buffer.  Return FN's value."
   (add-hook 'window-size-change-functions #'ein:nbview--window-changed nil t)
   (add-hook 'window-buffer-change-functions #'ein:nbview--window-changed nil t)
   (add-hook 'text-scale-mode-hook #'ein:nbview--window-changed nil t)
+  (add-hook 'display-line-numbers-mode-hook #'ein:nbview--line-numbers-changed nil t)
   (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--preview-enter-edit nil t)
   (add-hook 'ein:nbview-leave-edit-hook #'ein:nbview--preview-leave-edit nil t)
   ;; Global: one call refreshes every cells-view buffer.

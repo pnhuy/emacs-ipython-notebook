@@ -225,6 +225,31 @@ Regression: footers drawn before the buffer had a window kept the
                 (should (= 0 renders)))
             (advice-remove 'ein:nbview-render-outputs 'count)))))))
 
+(ert-deftest ein:nbview-layout-rules-follow-line-numbers ()
+  "Turning line numbers off or on redraws the rules to the new width.
+The window keeps its size, so `window-size-change-functions' do not run."
+  (ein:testing-with-nbview "smoke.ipynb"
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer (current-buffer))
+      (let* ((view ein:nbview--view)
+             (cell (car (ein:view-cells view)))
+             (header-length
+              (lambda ()
+                (length (get-text-property (ein:nbview--header-pos view cell)
+                                           'display)))))
+        ;; Until the next redisplay, the width of the line numbers is
+        ;; the last one drawn, as it is right after turning them off.
+        (cl-letf (((symbol-function 'line-number-display-width)
+                   (lambda (&rest _) 4)))
+          (display-line-numbers-mode 1)
+          (ein:nbview--window-changed (selected-window))
+          (let ((with-numbers (funcall header-length)))
+            (display-line-numbers-mode -1)
+            (should (= (funcall header-length) (+ with-numbers 4)))
+            (display-line-numbers-mode 1)
+            (should (= (funcall header-length) with-numbers))))))))
+
 (ert-deftest ein:nbview-layout-output-separator ()
   "A rule separates a code cell's source from its outputs, only when it has any."
   (ein:testing-with-nbview "smoke.ipynb"

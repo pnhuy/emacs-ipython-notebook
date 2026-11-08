@@ -136,26 +136,36 @@ with the call to the jupyter notebook."
   :group 'ein
   :type 'directory)
 
+(defun ein:jupyter--kernelspec-choices (command)
+  "Return (NAME . DISPLAY-NAME) for each kernelspec COMMAND lists.
+Runs COMMAND without a shell, so the user's login shell (fish,
+nushell, ...) cannot mangle the call, and discards its stderr.
+Return nil when COMMAND is missing or fails."
+  (when-let* ((program (executable-find command))
+              (output (with-temp-buffer
+                        (and (eql 0 (ignore-errors
+                                      (call-process program nil '(t nil) nil
+                                                    "kernelspec" "list" "--json")))
+                             (buffer-string)))))
+    (cl-loop for (k . spec) in
+             (alist-get 'kernelspecs
+                        (let ((json-object-type 'alist))
+                          ;; intentionally not ein:json-read-from-string
+                          (json-read-from-string output)))
+             collect `(,k . ,(alist-get 'display_name (alist-get 'spec spec))))))
+
 (defcustom ein:jupyter-default-kernel 'first-alphabetically
   "With which of ${XDG_DATA_HOME}/jupyter/kernels to create new notebooks."
   :group 'ein
   :type (append
          '(choice (other :tag "First alphabetically" first-alphabetically))
-         (condition-case err
-             (mapcar
-              (lambda (x) `(const :tag ,(cdr x) ,(car x)))
-              (cl-loop
-               for (k . spec) in
-               (alist-get
-                'kernelspecs
-                (let ((json-object-type 'alist))
-                  (json-read-from-string ;; intentionally not ein:json-read-from-string
-                   (shell-command-to-string
-                    (format "2>/dev/null %s kernelspec list --json"
-                            ein:jupyter-server-command)))))
-               collect `(,k . ,(alist-get 'display_name (alist-get 'spec spec)))))
-           (error (ein:log 'warn "ein:jupyter-default-kernel: %s" err)
-                  '((string :tag "Ask"))))))
+         (or (condition-case err
+                 (mapcar
+                  (lambda (x) `(const :tag ,(cdr x) ,(car x)))
+                  (ein:jupyter--kernelspec-choices ein:jupyter-server-command))
+               (error (ein:log 'warn "ein:jupyter-default-kernel: %s" err)
+                      nil))
+             '((string :tag "Ask")))))
 
 (defconst *ein:jupyter-server-process-name* "ein server")
 (defconst *ein:jupyter-server-buffer-name*

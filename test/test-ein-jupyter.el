@@ -37,6 +37,29 @@
                 (lambda (&rest _) (cl-incf probes) ,exit-code)))
        ,@body)))
 
+(ert-deftest ein:jupyter-kernelspec-choices-without-shell ()
+  "Kernelspecs are read without a shell and despite stderr noise.
+With fish as login shell, a leading \"2>/dev/null\" made the old
+query fail with (json-unknown-keyword fish)."
+  (let* ((dir (make-temp-file "ein-fake-jupyter-" t))
+         (fake (expand-file-name "fake-jupyter" dir))
+         (shell-file-name "/nonexistent/fish"))
+    (unwind-protect
+        (progn
+          (with-temp-file fake
+            (insert "#!/bin/sh\n"
+                    "echo 'fish: warning on stderr' >&2\n"
+                    "[ \"$1 $2 $3\" = 'kernelspec list --json' ] || exit 2\n"
+                    "echo '{\"kernelspecs\": {\"python3\": "
+                    "{\"spec\": {\"display_name\": \"Python 3\"}}}}'\n"))
+          (set-file-modes fake #o700)
+          (should (equal (ein:jupyter--kernelspec-choices fake)
+                         '((python3 . "Python 3")))))
+      (delete-directory dir t))))
+
+(ert-deftest ein:jupyter-kernelspec-choices-missing-command ()
+  (should-not (ein:jupyter--kernelspec-choices "/nonexistent/jupyter")))
+
 (ert-deftest ein:jupyter-detect-subcommand-server ()
   (let ((ein:jupyter-server-use-subcommand nil))
     (ein:testing-with-probe 0

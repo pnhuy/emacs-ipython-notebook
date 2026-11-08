@@ -420,7 +420,8 @@ Shift in list parlance means removing the front."
     buffer))
 
 (cl-defmethod ein:worksheet--buffer-name ((ws ein:worksheet))
-  (format "*ein: %s/%s*" (ein:worksheet-url-or-port ws) (ein:worksheet-notebook-path ws)))
+  "The notebook's file name; buffers of same-named notebooks get <N>."
+  (file-name-nondirectory (ein:worksheet-notebook-path ws)))
 
 (cl-defmethod ein:worksheet--get-buffer ((ws ein:worksheet))
   (or (ein:worksheet-buffer ws)
@@ -456,7 +457,7 @@ Shift in list parlance means removing the front."
                                 (eieio-oref pm/chunkmode 'fallback-mode)))))))
                (new-name (or impl-name base-name)))
           (unless (string= new-name (buffer-name b))
-            (rename-buffer new-name)))))))
+            (rename-buffer new-name t)))))))
 
 (cl-defmethod ein:worksheet-set-modified-p ((ws ein:worksheet) dirty)
   (ein:with-live-buffer (ein:worksheet-buffer ws)

@@ -147,6 +147,31 @@ anywhere on the file system."
   :group 'ein
   :type 'directory)
 
+(defcustom ein:jupyter-server-port-range '(10000 . 65535)
+  "Ports (LOW . HIGH) from which a server EIN starts takes a random free one.
+Nil lets the server choose (8888, or the next free port)."
+  :group 'ein
+  :type '(choice (cons :tag "Random port between" integer integer)
+                 (const :tag "Server default" nil)))
+
+(defun ein:jupyter--port-free-p (port)
+  (condition-case nil
+      (progn (delete-process (make-network-process
+                              :name "ein port probe" :server t :noquery t
+                              :host "127.0.0.1" :service port))
+             t)
+    (error nil)))
+
+(defun ein:jupyter--free-port ()
+  "A random free port in `ein:jupyter-server-port-range', or nil."
+  (when-let* ((range ein:jupyter-server-port-range))
+    (let* ((low (car range))
+           (size (1+ (- (cdr range) low)))
+           (start (random size)))
+      (cl-loop for i below (min size 200)
+               for port = (+ low (% (+ start i) size))
+               when (ein:jupyter--port-free-p port) return port))))
+
 (defconst ein:jupyter-implicit-server-args
   '("--ContentsManager.allow_hidden=True")
   "Extra arguments for the implicit server.
@@ -459,9 +484,13 @@ server command."
                                        server-command
                                        notebook-directory
                                        (append
-                                        (when (numberp port)
-                                          `("--port" ,(format "%s" port)
-                                            "--port-retries" "0"))
+                                        (if (numberp port)
+                                            `("--port" ,(format "%s" port)
+                                              "--port-retries" "0")
+                                          ;; Another process may take it first:
+                                          ;; the server then tries the next ports.
+                                          (when-let* ((random (ein:jupyter--free-port)))
+                                            `("--port" ,(format "%s" random))))
                                         extra-args))))
     (if-let* (((ein:jupyter--wait-until-ready proc ein:jupyter-server-startup-timeout))
               (buffer (get-buffer *ein:jupyter-server-buffer-name*))

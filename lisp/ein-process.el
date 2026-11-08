@@ -285,7 +285,11 @@ windows.  BUFFER-CALLBACK is then called with that buffer."
        (when raw
          (ein:process--show-notebook raw notebook)
          (when (and buffer-callback (buffer-live-p raw))
-           (funcall buffer-callback raw))))
+           (funcall buffer-callback raw))
+         ;; RAW held the file name; take it once RAW is gone.
+         (unless (buffer-live-p raw)
+           (mapc #'ein:worksheet-set-buffer-name
+                 (ein:$notebook-worksheets notebook)))))
      raw)))
 
 (defun ein:process-find-file-callback ()

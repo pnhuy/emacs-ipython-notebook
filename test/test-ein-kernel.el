@@ -194,6 +194,34 @@
       (should-not (ein:kernel-get-callbacks-for-msg kernel id-a))
       (should-not (ein:kernel-get-callbacks-for-msg kernel id-b)))))
 
+(ert-deftest ein:kernel-late-output-reaches-cell ()
+  "Output after the reply and idle still reaches its owner, until it runs again."
+  (eintest:with-live-kernel kernel _sent
+    (let* ((got '())
+           (owner (list 'cell))
+           (callbacks (lambda ()
+                        (list :output (cons (lambda (_ _type content _md)
+                                              (push (plist-get content :text) got))
+                                            owner)
+                              :execute_reply (cons #'ignore owner))))
+           (deliver (lambda (&rest msgs)
+                      (dolist (m msgs)
+                        (ein:kernel--handle-websocket-reply kernel nil (eintest:frame m)))))
+           (id-1 (ein:kernel-execute kernel "a" (funcall callbacks))))
+      (funcall deliver
+               (eintest:msg "shell" "execute_reply" id-1 '(:status "ok" :execution_count 1))
+               (eintest:msg "iopub" "status" id-1 '(:execution_state "idle"))
+               (eintest:msg "iopub" "stream" id-1 '(:name "stdout" :text "late")))
+      (should (equal got '("late")))
+      ;; The finished request no longer counts as pending.
+      (should-not (ein:kernel-get-callbacks-for-msg kernel id-1))
+      ;; Running the owner again ends the route of its previous request.
+      (let ((id-2 (ein:kernel-execute kernel "b" (funcall callbacks))))
+        (eintest:capturing-logs _logs
+          (funcall deliver (eintest:msg "iopub" "stream" id-1 '(:name "stdout" :text "stale"))))
+        (funcall deliver (eintest:msg "iopub" "stream" id-2 '(:name "stdout" :text "new")))
+        (should (equal got '("new" "late")))))))
+
 (ert-deftest ein:kernel-complete-request-and-reply ()
   "T112: `ein:kernel-complete' sends complete_request and dispatches its reply."
   (eintest:with-live-kernel kernel sent

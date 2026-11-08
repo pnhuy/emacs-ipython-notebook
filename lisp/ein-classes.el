@@ -264,7 +264,8 @@ defined by the server as just ein:$kernel in the client."
   after-start-hook
   after-execute-hook
   status                                ; starting idle busy restarting disconnected dead
-  msg-progress)                         ; msg-id -> reply or idle, see `ein:kernel--msg-done'
+  msg-progress                          ; msg-id -> reply or idle, see `ein:kernel--msg-done'
+  output-routes)                        ; see `ein:kernel--output-routes'
 
 ;;; Cells
 

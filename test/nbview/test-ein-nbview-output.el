@@ -399,7 +399,8 @@ took the prefix of the text after the footer, none at the end)."
                 (accept-process-output nil 0.02)))
             (accept-process-output nil 0.15)
             (should (<= renders 3))
-            (should (string-match-p "\\`0\n1\n" (ein:testing-out-footer cell)))
+            ;; After the source/output separator.
+            (should (string-match-p "\\`[┄-]+\n0\n1\n" (ein:testing-out-footer cell)))
             (should-not buffer-undo-list))
         (advice-remove 'ein:nbview--render-footer 'count)))))
 

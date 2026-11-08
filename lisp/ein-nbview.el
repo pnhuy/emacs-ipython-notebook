@@ -110,6 +110,12 @@
   :package-version '(ein . "0.18")
   :group 'ein-nbview)
 
+(defface ein:nbview-output-separator
+  '((t :inherit ein:nbview-cell-rule))
+  "Rule between a code cell's source and its outputs."
+  :package-version '(ein . "0.18")
+  :group 'ein-nbview)
+
 (defface ein:nbview-code-face
   '((((class color) (min-colors 88) (background light))
      :background "#f4f4f4" :extend t)
@@ -190,16 +196,44 @@
   "Return the left bar string in FACE."
   (propertize (if (char-displayable-p ?▎) "▎ " "| ") 'face face))
 
-(defun ein:nbview--rule-width ()
-  "Width of the cell rules, from the buffer's window when it has one."
-  (let ((w (get-buffer-window (current-buffer) t)))
-    (max 10 (- (if w (window-body-width w) 80) 12))))
+(defconst ein:nbview--rule-margin 2
+  "Columns left free at the right end of the cell rules.")
 
-(defun ein:nbview--rule (&optional shorten)
-  "Return a horizontal rule string, SHORTEN columns narrower."
-  (propertize (make-string (max 3 (- (ein:nbview--rule-width) (or shorten 0)))
-                           (ein:nbview--rule-char))
-              'face 'ein:nbview-cell-rule))
+(defun ein:nbview--line-metrics ()
+  "Return (AVAIL . MEASURE) for one cell line of the current buffer.
+MEASURE returns the displayed width of a string and AVAIL is the width
+that a line can use after the cell bar.  Graphic frames measure in
+pixels: symbols drawn from fallback fonts are wider than their
+`string-width' (they made the cell toolbar wrap).  Elsewhere, and
+without a window, widths are columns."
+  (let* ((buf (current-buffer))
+         (w (get-buffer-window buf t))
+         (graphic (and w (display-graphic-p (window-frame w))))
+         (measure (if graphic
+                      (lambda (s) (string-pixel-width s buf))
+                    #'string-width))
+         (unit (if graphic (window-font-width w) 1)))
+    (cons (- (* unit (- (if w (window-max-chars-per-line w) 80)
+                        ein:nbview--rule-margin))
+             (funcall measure (ein:nbview--bar 'ein:nbview-cell-bar)))
+          measure)))
+
+(defun ein:nbview--rule (&optional used char face)
+  "Return a horizontal rule that fills a cell line beside USED.
+USED is the rest of the line's text (default none).  The rule is drawn
+with CHAR in FACE (default the cell rule character and face)."
+  (let* ((metrics (ein:nbview--line-metrics))
+         (measure (cdr metrics))
+         (glyph (propertize (string (or char (ein:nbview--rule-char)))
+                            'face (or face 'ein:nbview-cell-rule)))
+         (room (- (car metrics) (if used (funcall measure used) 0))))
+    (apply #'concat
+           (make-list (max 3 (/ room (max 1 (funcall measure glyph)))) glyph))))
+
+(defun ein:nbview--output-rule ()
+  "Return the rule between a code cell's source and its outputs."
+  (ein:nbview--rule nil (if (char-displayable-p ?┄) ?┄ ?-)
+                    'ein:nbview-output-separator))
 
 (defun ein:nbview--label (cell)
   "Return the header label of CELL: its prompt, or its type."
@@ -219,9 +253,10 @@
   "Return the `display' string of CELL's header.
 The selected (or hovered) cell's header ends with its toolbar."
   (let* ((toolbar (and (ein:nbview--cell-toolbar-p cell) (ein:nbview--cell-toolbar)))
+         (label (ein:nbview--label cell))
          (s (concat (make-string ein:nbview-cell-spacing ?\n)
-                    (ein:nbview--label cell) " "
-                    (ein:nbview--rule (if toolbar (1+ (string-width toolbar)) 0))
+                    label " "
+                    (ein:nbview--rule (concat label " " (and toolbar " ") toolbar))
                     (if toolbar (concat " " toolbar) "")
                     "\n")))
     ;; A click on a toolbar button acts on this cell.
@@ -267,9 +302,11 @@ The selected (or hovered) cell's header ends with its toolbar."
                          (ein:nbview--render-footer view cell))))))
 
 (defun ein:nbview--footer-body (view cell)
-  "Return what VIEW shows below CELL's source: its outputs, then a rule."
+  "Return what VIEW shows below CELL's source: its outputs, then a rule.
+A lighter rule separates outputs from the source."
   (let ((outputs (and (ein:codecell-p cell) (ein:oref-safe cell 'outputs))))
     (concat
+     (and outputs (concat (ein:nbview--output-rule) "\n"))
      (cond ((null outputs) "")
            ((ein:oref-safe cell 'collapsed)
             (propertize "[outputs hidden]\n" 'face 'ein:nbview-prompt))

@@ -163,6 +163,44 @@
   (cl-letf (((symbol-function 'char-displayable-p) (lambda (_c) t)))
     (should (string-match-p "\\`─+\\'" (ein:nbview--rule)))))
 
+(ert-deftest ein:nbview-layout-rule-fits-wide-glyphs ()
+  "A header rule leaves room for its toolbar by measured width, not columns.
+Regression: in GUI frames the toolbar's symbols come from fallback fonts
+wider than their `string-width', and the toolbar wrapped to a new line."
+  (let* ((avail 100)
+         (measure (lambda (s)
+                    ;; Every non-ASCII glyph is three units wide.
+                    (cl-loop for c across s sum (if (< c 128) 1 3))))
+         (label "Markdown")
+         (toolbar "▶ ＋ ✕ ↑ ↓ ⋯"))
+    (cl-letf (((symbol-function 'ein:nbview--line-metrics)
+               (lambda () (cons avail measure)))
+              ((symbol-function 'char-displayable-p) (lambda (_c) t)))
+      (let* ((used (concat label "  " toolbar))
+             (header (funcall measure (concat label " " (ein:nbview--rule used)
+                                              " " toolbar)))
+             (footer (funcall measure (ein:nbview--rule))))
+        (should (<= header avail))
+        ;; Header and footer rules end within one rule glyph of each other.
+        (should (<= (abs (- header footer)) 3))))))
+
+(ert-deftest ein:nbview-layout-output-separator ()
+  "A rule separates a code cell's source from its outputs, only when it has any."
+  (ein:testing-with-nbview "smoke.ipynb"
+    (let* ((view ein:nbview--view)
+           (code (cadr (ein:view-cells view))))
+      (setf (slot-value code 'outputs) nil)
+      (let ((s (ein:nbview--footer-body view code)))
+        (should-not (text-property-any 0 (length s)
+                                       'face 'ein:nbview-output-separator s)))
+      (setf (slot-value code 'outputs)
+            (list (list :output_type "stream" :name "stdout" :text "hello\n")))
+      (ein:nbview--render-footer view code)
+      (let ((s (ein:nbview--footer-rendered view code)))
+        (should (string-match "^\\([┄-]+\\)\nhello" s))
+        (should (eq 'ein:nbview-output-separator
+                    (get-text-property (match-beginning 1) 'face s)))))))
+
 ;; (g)
 (ert-deftest ein:nbview-layout-decoration-like-source-roundtrips ()
   (ein:testing-with-nbview "smoke.ipynb"

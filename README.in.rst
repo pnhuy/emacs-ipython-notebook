@@ -121,7 +121,8 @@ The kernel comes from the notebook's Python environment, as in VS Code:
   toolbar) picks any environment: the project's, the active ``VIRTUAL_ENV`` or
   ``CONDA_PREFIX``, ``~/.virtualenvs``, pyenv and conda environments, or any
   Python executable.  The choice is remembered per notebook, and EIN offers to
-  ``pip install ipykernel`` into it when missing.
+  install ``ipykernel`` into it when missing: with ``uv pip install`` for
+  environments made by uv or without pip, else with ``pip``.
 * The saved notebook keeps a portable ``python3`` kernelspec, so it opens
   unchanged in Jupyter and VS Code.
 

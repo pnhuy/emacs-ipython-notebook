@@ -183,5 +183,50 @@ the chosen one."
       (should (eq (ein:$notebook-kernelspec nb) py3))
       (should (equal (ein:nbview--kernel-name nb) "python3")))))
 
+(ert-deftest ein:pyenv-install-command-pip-or-uv ()
+  "uv venvs (and venvs without pip) install ipykernel with uv."
+  (let* ((dir (make-temp-file "ein-venv-" t))
+         (python (expand-file-name "bin/python" dir))
+         (cfg (expand-file-name "pyvenv.cfg" dir))
+         (ein:pyenv-uv-command "uv")
+         has-pip uv)
+    (unwind-protect
+        (cl-letf (((symbol-function 'ein:pyenv--has-pip-p) (lambda (_) has-pip))
+                  ((symbol-function 'executable-find)
+                   (lambda (cmd &rest _) (and uv (equal cmd "uv") "/usr/bin/uv"))))
+          (write-region "home = /usr/bin\n" nil cfg nil 'silent)
+          (setq has-pip t)
+          (should (equal (ein:pyenv-install-command python)
+                         (list python "-m" "pip" "install" "ipykernel")))
+          ;; No pip: uv when available, else nothing.
+          (setq has-pip nil uv t)
+          (should (equal (ein:pyenv-install-command python)
+                         (list "/usr/bin/uv" "pip" "install" "--python" python "ipykernel")))
+          (setq uv nil)
+          (should-not (ein:pyenv-install-command python))
+          ;; A uv-made venv prefers uv even with pip.
+          (write-region "home = /usr/bin\nuv = 0.13.0\n" nil cfg nil 'silent)
+          (setq has-pip t uv t)
+          (should (equal (car (ein:pyenv-install-command python)) "/usr/bin/uv")))
+      (delete-directory dir t))))
+
+(ert-deftest ein:pyenv-with-ipykernel-runs-install-command ()
+  (let ((ein:pyenv--ipykernel (make-hash-table :test #'equal))
+        command prompt)
+    (cl-letf (((symbol-function 'ein:pyenv-has-ipykernel-p) #'ignore)
+              ((symbol-function 'ein:pyenv-install-command)
+               (lambda (py) (list "/usr/bin/uv" "pip" "install" "--python" py "ipykernel")))
+              ((symbol-function 'y-or-n-p) (lambda (p) (setq prompt p) t))
+              ((symbol-function 'make-process)
+               (lambda (&rest args) (setq command (plist-get args :command)) nil)))
+      (ein:pyenv--with-ipykernel "/p/.venv/bin/python" #'ignore)
+      (should (string-match-p "with uv" prompt))
+      (should (equal (car command) "/usr/bin/uv")))
+    ;; Without an installer, say how to install it.
+    (cl-letf (((symbol-function 'ein:pyenv-has-ipykernel-p) #'ignore)
+              ((symbol-function 'ein:pyenv-install-command) #'ignore))
+      (should-error (ein:pyenv--with-ipykernel "/p/.venv/bin/python" #'ignore)
+                    :type 'user-error))))
+
 (provide 'test-ein-pyenv)
 ;;; test-ein-pyenv.el ends here

@@ -177,28 +177,62 @@ Return its kernel name."
                    (call-process python nil nil nil "-c" "import ipykernel")))
            (puthash python t ein:pyenv--ipykernel))))
 
+(defcustom ein:pyenv-uv-command "uv"
+  "The uv executable, used to install ipykernel into environments made
+by uv or lacking pip."
+  :type 'string
+  :group 'ein
+  :package-version '(ein . "0.18"))
+
+(defun ein:pyenv--has-pip-p (python)
+  "Non-nil when PYTHON can run pip."
+  (eq 0 (ignore-errors (call-process python nil nil nil "-m" "pip" "--version"))))
+
+(defun ein:pyenv--uv-venv-p (python)
+  "Non-nil when PYTHON's environment was created by uv."
+  (let ((cfg (expand-file-name "../pyvenv.cfg" (file-name-directory python))))
+    (and (file-readable-p cfg)
+         (with-temp-buffer
+           (insert-file-contents cfg)
+           (re-search-forward "^uv[ \t]*=" nil t)))))
+
+(defun ein:pyenv-install-command (python)
+  "The command installing ipykernel for PYTHON, or nil when there is none.
+uv for environments made by uv or without pip, else pip."
+  (let ((uv (and ein:pyenv-uv-command (executable-find ein:pyenv-uv-command))))
+    (cond ((and uv (or (ein:pyenv--uv-venv-p python)
+                       (not (ein:pyenv--has-pip-p python))))
+           (list uv "pip" "install" "--python" python "ipykernel"))
+          ((ein:pyenv--has-pip-p python)
+           (list python "-m" "pip" "install" "ipykernel")))))
+
 (defun ein:pyenv--with-ipykernel (python then)
   "Call THEN once PYTHON has ipykernel, installing it when the user agrees."
-  (cond
-   ((ein:pyenv-has-ipykernel-p python) (funcall then))
-   ((y-or-n-p (format "%s has no ipykernel.  Install it with pip? "
-                      (abbreviate-file-name python)))
-    (let ((buffer (get-buffer-create "*ein:pip*")))
-      (with-current-buffer buffer
-        (let ((inhibit-read-only t)) (erase-buffer)))
-      (message "Installing ipykernel for %s..." (abbreviate-file-name python))
-      (make-process
-       :name "ein:pip" :buffer buffer :noquery t
-       :command (list python "-m" "pip" "install" "ipykernel")
-       :sentinel (lambda (proc _event)
-                   (unless (process-live-p proc)
-                     (if (and (zerop (process-exit-status proc))
-                              (ein:pyenv-has-ipykernel-p python))
-                         (funcall then)
-                       (display-buffer (process-buffer proc))
-                       (message "Installing ipykernel failed; see *ein:pip*")))))))
-   (t (user-error "%s needs ipykernel to run notebooks"
-                  (abbreviate-file-name python)))))
+  (let* ((short (abbreviate-file-name python))
+         (command (and (not (ein:pyenv-has-ipykernel-p python))
+                       (ein:pyenv-install-command python)))
+         (tool (if (equal (cadr command) "-m") "pip" "uv")))
+    (cond
+     ((ein:pyenv-has-ipykernel-p python) (funcall then))
+     ((null command)
+      (user-error "%s needs ipykernel to run notebooks, and has neither pip nor uv; \
+install ipykernel into it" short))
+     ((y-or-n-p (format "%s has no ipykernel.  Install it with %s? " short tool))
+      (let ((buffer (get-buffer-create "*ein:install*")))
+        (with-current-buffer buffer
+          (let ((inhibit-read-only t)) (erase-buffer)))
+        (message "Installing ipykernel for %s with %s..." short tool)
+        (make-process
+         :name "ein:install" :buffer buffer :noquery t
+         :command command
+         :sentinel (lambda (proc _event)
+                     (unless (process-live-p proc)
+                       (if (and (zerop (process-exit-status proc))
+                                (ein:pyenv-has-ipykernel-p python))
+                           (funcall then)
+                         (display-buffer (process-buffer proc))
+                         (message "Installing ipykernel failed; see *ein:install*")))))))
+     (t (user-error "%s needs ipykernel to run notebooks" short)))))
 
 ;;; Choices
 

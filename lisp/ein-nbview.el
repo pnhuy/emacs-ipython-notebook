@@ -196,9 +196,6 @@
   "Return the left bar string in FACE."
   (propertize (if (char-displayable-p ?▎) "▎ " "| ") 'face face))
 
-(defconst ein:nbview--rule-margin 2
-  "Columns left free at the right end of the cell rules.")
-
 (defun ein:nbview--max-chars (window)
   "Return `window-max-chars-per-line' of WINDOW, minding line numbers.
 That subtracts the line number width of the last redisplay, also when
@@ -234,8 +231,7 @@ without a window, widths are columns."
                       (lambda (s) (string-pixel-width s buf))
                     #'string-width))
          (unit (if graphic (window-font-width w) 1)))
-    (cons (- (* unit (- (if w (ein:nbview--max-chars w) 80)
-                        ein:nbview--rule-margin))
+    (cons (- (* unit (if w (ein:nbview--max-chars w) 80))
              (funcall measure (ein:nbview--bar 'ein:nbview-cell-bar)))
           measure)))
 

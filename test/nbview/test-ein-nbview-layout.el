@@ -184,6 +184,16 @@ wider than their `string-width', and the toolbar wrapped to a new line."
         ;; Header and footer rules end within one rule glyph of each other.
         (should (<= (abs (- header footer)) 3))))))
 
+(ert-deftest ein:nbview-layout-rules-reach-right-edge ()
+  "Cell lines use the window's full width, leaving no blank right margin."
+  (ein:testing-with-nbview "smoke.ipynb"
+    (save-window-excursion
+      (delete-other-windows)
+      (switch-to-buffer (current-buffer))
+      (should (= (window-max-chars-per-line)
+                 (+ (car (ein:nbview--line-metrics))
+                    (string-width (ein:nbview--bar 'ein:nbview-cell-bar))))))))
+
 (ert-deftest ein:nbview-layout-rules-follow-window-width ()
   "Rules are drawn again for a new line width, without the outputs.
 Regression: footers drawn before the buffer had a window kept the

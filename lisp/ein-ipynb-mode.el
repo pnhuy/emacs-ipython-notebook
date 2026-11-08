@@ -41,8 +41,11 @@
 As in VS Code, the file opens where it is, on a Jupyter server EIN
 starts when needed (see `ein:open').  It happens when the file's
 buffer is shown in the selected window, so `find-file-noselect' and
-previews while the minibuffer is active do not start servers.  Use
-`find-file-literally', or set this to nil, to see the JSON."
+previews while the minibuffer is active do not start servers.  Until
+then the buffer shows a placeholder, not the JSON, and runs no code
+mode hooks (no eglot for a file about to become a notebook).
+\\[ein:ipynb-edit-json] edits the JSON; with this nil, the JSON is
+shown read-only."
   :type 'boolean
   :group 'ein)
 
@@ -70,9 +73,36 @@ previews while the minibuffer is active do not start servers.  Use
     (with-current-buffer buffer
       (condition-case err
           (ein:process-open-notebook buffer-file-name #'kill-buffer-if-not-modified)
-        (error (message "Showing %s as JSON: %s"
+        (error (ein:ipynb--hide-json nil)
+               (message "Showing %s as JSON: %s"
                         (file-name-nondirectory buffer-file-name)
                         (error-message-string err)))))))
+
+(defvar-local ein:ipynb--placeholder nil
+  "Overlay showing a placeholder instead of the JSON.")
+
+(defun ein:ipynb--hide-json (hide)
+  "Show a placeholder instead of the JSON when HIDE, else the JSON."
+  (when ein:ipynb--placeholder
+    (delete-overlay ein:ipynb--placeholder)
+    (setq ein:ipynb--placeholder nil))
+  (when hide
+    (let ((ov (make-overlay (point-min) (point-max) nil nil t)))
+      (overlay-put ov 'display
+                   (substitute-command-keys
+                    (format "Opening %s as a notebook...\n\n\
+\\<ein:ipynb-mode-map>\\[ein:ipynb-edit-json] edits the JSON instead.\n"
+                            (file-name-nondirectory buffer-file-name))))
+      (overlay-put ov 'face 'shadow)
+      (setq ein:ipynb--placeholder ov))))
+
+(defun ein:ipynb-edit-json ()
+  "Edit this ipynb file as JSON instead of opening it as a notebook."
+  (interactive)
+  (setq ein:ipynb--auto-opened t)
+  (ein:ipynb--hide-json nil)
+  (js-json-mode)
+  (setq buffer-read-only (not (file-writable-p buffer-file-name))))
 
 (defun ein:ipynb--maybe-open (window)
   "Open the buffer of WINDOW as a notebook if it is time to."
@@ -83,19 +113,26 @@ previews while the minibuffer is active do not start servers.  Use
       (run-at-time 0 nil #'ein:ipynb--open buffer))))
 
 ;;;###autoload
-(define-derived-mode ein:ipynb-mode js-mode "ein:ipynb"
-  "A simple mode for ipynb file.
+(define-derived-mode ein:ipynb-mode special-mode "ein:ipynb"
+  "Mode for an ipynb file about to open as a notebook.
+It is not a code mode, so code mode hooks (eglot, linters) do not
+run.  See `ein:ipynb-open-as-notebook'.
 
 \\{ein:ipynb-mode-map}
 "
   :group 'ein
+  (ein:ipynb--hide-json (and ein:ipynb-open-as-notebook
+                             buffer-file-name
+                             (not (file-remote-p buffer-file-name))
+                             (not ein:ipynb--auto-opened)))
   (add-hook 'window-buffer-change-functions #'ein:ipynb--maybe-open nil t)
   (add-hook 'window-selection-change-functions #'ein:ipynb--maybe-open nil t)
   :after-hook
   (let* ((filename (file-name-nondirectory buffer-file-truename))
          (remote-filename (concat (file-name-as-directory "run-remote") filename)))
     ;; fragile hack to refresh s3fuse
-    (call-process "cat" nil nil nil remote-filename)
+    (when (file-directory-p "run-remote")
+      (call-process "cat" nil nil nil remote-filename))
     (when (and (file-readable-p remote-filename)
                (file-newer-than-file-p remote-filename filename)
                (prog1
@@ -119,14 +156,16 @@ previews while the minibuffer is active do not start servers.  Use
         (message "Backup failed.  Not replaced")))))
 
 (let ((map ein:ipynb-mode-map))
-  (set-keymap-parent map js-mode-map)
+  (define-key map "\C-c\C-j" 'ein:ipynb-edit-json)
   (define-key map "\C-c\C-z" 'ein:process-find-file-callback)
   (define-key map "\C-c\C-o" 'ein:process-find-file-callback)
   (define-key map "\C-c\C-r" 'ein:gat-run-remote)
   (easy-menu-define ein:ipynb-menu map "EIN IPyNB Mode Menu"
     '("EIN IPyNB File"
       ["Open notebook" ein:process-find-file-callback
-       :help "Open this ipynb file as a notebook."])))
+       :help "Open this ipynb file as a notebook."]
+      ["Edit JSON" ein:ipynb-edit-json
+       :help "Edit this ipynb file as JSON."])))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist '("\\.ipynb\\'" . ein:ipynb-mode))

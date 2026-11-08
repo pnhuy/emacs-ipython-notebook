@@ -115,8 +115,10 @@ Open any notebook the way you open any file:
 
 * Visit an ``.ipynb`` file (``C-x C-f``, dired, a project finder).  With
   ``ein:ipynb-mode`` on ``auto-mode-alist`` it opens as a notebook when it
-  is shown in a window (set ``ein:ipynb-open-as-notebook`` to ``nil`` to see
-  the JSON and press ``C-c C-o`` instead), or,
+  is shown in a window.  Until then the buffer shows a placeholder, not the
+  JSON, and no code mode hooks (eglot, linters) run.  ``C-c C-j`` edits the
+  JSON instead; set ``ein:ipynb-open-as-notebook`` to ``nil`` to see the JSON
+  and press ``C-c C-o`` to open it, or,
 * ``M-x ein:open`` reads a file name; a name that does not exist yet becomes
   a new notebook with one empty code cell.
 

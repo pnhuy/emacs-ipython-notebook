@@ -66,6 +66,53 @@
       (ein:ipynb--open buffer)
       (should (buffer-live-p buffer)))))
 
+(ert-deftest ein:ipynb-visiting-skips-code-modes ()
+  "Visiting an ipynb file shows a placeholder, not JSON in a code mode.
+So `prog-mode-hook' (eglot, linters) does not run for a buffer that
+is about to become a notebook."
+  (let (ran)
+    (let ((prog-mode-hook (list (lambda () (push 'prog ran))))
+          (ein:ipynb-open-as-notebook t))
+      (let* ((file (make-temp-file "ein-ipynb-" nil ".ipynb" "{\"cells\": []}"))
+             (buffer (find-file-noselect file)))
+        (unwind-protect
+            (with-current-buffer buffer
+              (should (derived-mode-p 'ein:ipynb-mode))
+              (should-not (derived-mode-p 'prog-mode))
+              (should buffer-read-only)
+              (should (string-match-p
+                       "Opening .*ein-ipynb-.*\\.ipynb as a notebook"
+                       (format "%s" (get-char-property (point-min) 'display))))
+              ;; The file text itself is untouched.
+              (should (equal (buffer-string) "{\"cells\": []}")))
+          (kill-buffer buffer)
+          (delete-file file))))
+    (should-not ran)))
+
+(ert-deftest ein:ipynb-json-when-not-opening ()
+  "Without auto-open, or after a failed open, the JSON is shown."
+  (ein:testing-ipynb--visiting
+    (should-not (get-char-property (point-min) 'display)))
+  (let ((ein:ipynb-open-as-notebook t))
+    (let* ((file (make-temp-file "ein-ipynb-" nil ".ipynb" "{}"))
+           (buffer (find-file-noselect file)))
+      (unwind-protect
+          (with-current-buffer buffer
+            (should (get-char-property (point-min) 'display))
+            (cl-letf (((symbol-function 'ein:process-open-notebook)
+                       (lambda (&rest _) (user-error "No jupyter"))))
+              (ein:ipynb--open buffer))
+            (should-not (get-char-property (point-min) 'display)))
+        (kill-buffer buffer)
+        (delete-file file)))))
+
+(ert-deftest ein:ipynb-edit-json ()
+  (ein:testing-ipynb--visiting
+    (ein:ipynb-edit-json)
+    (should (derived-mode-p 'js-json-mode))
+    (should-not buffer-read-only)
+    (should-not (get-char-property (point-min) 'display))))
+
 (ert-deftest ein:ipynb-visiting-loads-little ()
   "Visiting an ipynb file, as a `consult' preview does, stays cheap.
 The rest of EIN loads only once the file is opened as a notebook."

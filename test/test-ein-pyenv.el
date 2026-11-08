@@ -123,7 +123,9 @@ uses it; a project environment is not forced on a non-Python notebook."
            refreshed done)
       (cl-letf (((symbol-function 'ein:query-kernelspecs)
                  (lambda (_url callback) (setq refreshed t) (funcall callback))))
-        (ein:pyenv-prepare file 8888 "proj/a.ipynb" (lambda () (setq done t))))
+        (ein:pyenv-prepare file 8888 "proj/a.ipynb" (lambda () (setq done t)))
+        (with-timeout (5 (ert-fail "Not prepared"))
+          (while (not done) (accept-process-output nil 0.05))))
       (should (and refreshed done))
       (let ((nb (make-ein:$notebook :url-or-port 8888 :notebook-path "proj/a.ipynb")))
         (should (equal (ein:pyenv--session-kernel nb) (ein:pyenv-kernel-name python)))
@@ -137,8 +139,57 @@ uses it; a project environment is not forced on a non-Python notebook."
       (cl-letf (((symbol-function 'ein:query-kernelspecs)
                  (lambda (&rest _) (error "Refreshed"))))
         (ein:pyenv-prepare (expand-file-name "proj/a.ipynb" root) 8888 "proj/a.ipynb"
-                           (lambda () (setq done t))))
+                           (lambda () (setq done t)))
+        (with-timeout (5 (ert-fail "Not prepared"))
+          (while (not done) (accept-process-output nil 0.05))))
       (should done)
+      (should (= (hash-table-count ein:pyenv--sessions) 0)))))
+
+(defun ein:testing-pyenv--hanging-python (env)
+  "Make ENV a fake environment whose python never answers, and counts its runs."
+  (let ((python (expand-file-name "bin/python" env)))
+    (make-directory (file-name-directory python) t)
+    (with-temp-file python
+      (insert (format "#!/bin/sh\necho >> %s\nexec sleep 30\n"
+                      (shell-quote-argument (expand-file-name "runs" env)))))
+    (set-file-modes python #o755)
+    python))
+
+(defun ein:testing-pyenv--runs (env)
+  (let ((file (expand-file-name "runs" env)))
+    (if (file-exists-p file)
+        (with-temp-buffer (insert-file-contents file) (count-lines 1 (point-max)))
+      0)))
+
+(ert-deftest ein:pyenv-probe-times-out-once ()
+  "A Python that hangs does not hang Emacs, and is not asked again."
+  (ein:testing-pyenv--sandbox
+    (let* ((env (expand-file-name "proj/.venv" root))
+           (python (ein:testing-pyenv--hanging-python env))
+           (ein:pyenv-probe-timeout 0.3)
+           (start (float-time)))
+      (should-not (ein:pyenv-has-ipykernel-p python))
+      (should (< (- (float-time) start) 3))
+      (should-not (ein:pyenv-has-ipykernel-p python))
+      (should (= 1 (ein:testing-pyenv--runs env)))
+      (should-not (process-list)))))
+
+(ert-deftest ein:pyenv-prepare-does-not-block ()
+  "Opening a notebook checks its environment in the background."
+  (ein:testing-pyenv--sandbox
+    (let* ((env (expand-file-name "proj/.venv" root))
+           (ein:pyenv-auto-select t)
+           (ein:pyenv-probe-timeout 0.5)
+           done)
+      (ein:testing-pyenv--hanging-python env)
+      (cl-letf (((symbol-function 'ein:query-kernelspecs)
+                 (lambda (&rest _) (error "Refreshed"))))
+        (let ((start (float-time)))
+          (ein:pyenv-prepare (expand-file-name "proj/a.ipynb" root) 8888 "proj/a.ipynb"
+                             (lambda () (setq done t)))
+          (should (< (- (float-time) start) 0.3)))
+        (with-timeout (5 (ert-fail "Not prepared after the probe timed out"))
+          (while (not done) (accept-process-output nil 0.05))))
       (should (= (hash-table-count ein:pyenv--sessions) 0)))))
 
 (ert-deftest ein:pyenv-server-sees-kernels ()

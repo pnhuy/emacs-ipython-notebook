@@ -167,15 +167,72 @@ Return its kernel name."
         (insert (json-encode spec) "\n")))
     name))
 
+(defcustom ein:pyenv-probe-timeout 5
+  "Seconds to wait for a Python asked whether it has ipykernel or pip.
+A Python that does not answer in time (a hung network mount, a broken
+interpreter) counts as having neither."
+  :type 'number
+  :group 'ein
+  :package-version '(ein . "0.18"))
+
 (defvar ein:pyenv--ipykernel (make-hash-table :test #'equal)
-  "Pythons known to have ipykernel.")
+  "PYTHON to t when it has ipykernel, `no' when it has not.
+Choosing an environment explicitly asks again.")
+
+(defun ein:pyenv--probe-async (python args callback)
+  "Run PYTHON with ARGS, then call CALLBACK with non-nil when it exits 0.
+Give up after `ein:pyenv-probe-timeout' seconds."
+  (let* ((done nil)
+         (finish (lambda (ok)
+                   (unless done
+                     (setq done t)
+                     (funcall callback ok))))
+         (proc (condition-case nil
+                   (make-process
+                    :name "ein:pyenv-probe"
+                    :command (cons python args)
+                    :buffer nil :noquery t :connection-type 'pipe
+                    :stderr null-device
+                    :sentinel (lambda (proc _event)
+                                (unless (process-live-p proc)
+                                  (funcall finish (eq 0 (process-exit-status proc))))))
+                 (error nil))))
+    (if (not proc)
+        (funcall finish nil)
+      (run-at-time ein:pyenv-probe-timeout nil
+                   (lambda ()
+                     (when (process-live-p proc)
+                       (ein:log 'info "%s did not answer in %s s"
+                                (abbreviate-file-name python) ein:pyenv-probe-timeout)
+                       (delete-process proc)
+                       (funcall finish nil)))))))
+
+(defun ein:pyenv--probe (python &rest args)
+  "Non-nil when PYTHON with ARGS exits 0 within `ein:pyenv-probe-timeout'."
+  (let ((result 'pending))
+    (ein:pyenv--probe-async python args (lambda (ok) (setq result ok)))
+    (while (eq result 'pending)
+      (accept-process-output nil 0.05))
+    result))
+
+(defun ein:pyenv--has-ipykernel-async (python callback)
+  "Call CALLBACK with non-nil when PYTHON can import ipykernel."
+  (pcase (gethash python ein:pyenv--ipykernel)
+    ('t (funcall callback t))
+    ('no (funcall callback nil))
+    (_ (ein:pyenv--probe-async
+        python '("-c" "import ipykernel")
+        (lambda (ok)
+          (puthash python (if ok t 'no) ein:pyenv--ipykernel)
+          (funcall callback ok))))))
 
 (defun ein:pyenv-has-ipykernel-p (python)
   "Non-nil when PYTHON can import ipykernel."
-  (or (gethash python ein:pyenv--ipykernel)
-      (and (eq 0 (ignore-errors
-                   (call-process python nil nil nil "-c" "import ipykernel")))
-           (puthash python t ein:pyenv--ipykernel))))
+  (let ((result 'pending))
+    (ein:pyenv--has-ipykernel-async python (lambda (ok) (setq result ok)))
+    (while (eq result 'pending)
+      (accept-process-output nil 0.05))
+    result))
 
 (defcustom ein:pyenv-uv-command "uv"
   "The uv executable, used to install ipykernel into environments made
@@ -186,7 +243,7 @@ by uv or lacking pip."
 
 (defun ein:pyenv--has-pip-p (python)
   "Non-nil when PYTHON can run pip."
-  (eq 0 (ignore-errors (call-process python nil nil nil "-m" "pip" "--version"))))
+  (ein:pyenv--probe python "-m" "pip" "--version"))
 
 (defun ein:pyenv--uv-venv-p (python)
   "Non-nil when PYTHON's environment was created by uv."
@@ -208,6 +265,8 @@ uv for environments made by uv or without pip, else pip."
 
 (defun ein:pyenv--with-ipykernel (python then)
   "Call THEN once PYTHON has ipykernel, installing it when the user agrees."
+  ;; The user chose PYTHON: ask it again, it may have ipykernel by now.
+  (remhash python ein:pyenv--ipykernel)
   (let* ((short (abbreviate-file-name python))
          (command (and (not (ein:pyenv-has-ipykernel-p python))
                        (ein:pyenv-install-command python)))
@@ -227,6 +286,7 @@ install ipykernel into it" short))
          :command command
          :sentinel (lambda (proc _event)
                      (unless (process-live-p proc)
+                       (remhash python ein:pyenv--ipykernel)
                        (if (and (zerop (process-exit-status proc))
                                 (ein:pyenv-has-ipykernel-p python))
                            (funcall then)
@@ -315,15 +375,18 @@ on its environment's kernel, then call CALLBACK with no arguments.
 Without an environment, or one without ipykernel, just call CALLBACK."
   (pcase (and filename (ein:pyenv-python-for filename))
     (`(,python . ,explicit)
-     (if (not (ein:pyenv-has-ipykernel-p python))
-         (progn
-           (message "%s has no ipykernel; using the default kernel (M-x ein:select-python-environment)"
-                    (abbreviate-file-name python))
-           (funcall callback))
-       (puthash (cons url-or-port path)
-                (cons (ein:pyenv-write-kernelspec python) explicit)
-                ein:pyenv--sessions)
-       (ein:query-kernelspecs url-or-port callback)))
+     (ein:pyenv--has-ipykernel-async
+      python
+      (lambda (ok)
+        (if (not ok)
+            (progn
+              (message "%s has no ipykernel; using the default kernel (M-x ein:select-python-environment)"
+                       (abbreviate-file-name python))
+              (funcall callback))
+          (puthash (cons url-or-port path)
+                   (cons (ein:pyenv-write-kernelspec python) explicit)
+                   ein:pyenv--sessions)
+          (ein:query-kernelspecs url-or-port callback)))))
     (_ (funcall callback))))
 
 ;;; Choosing

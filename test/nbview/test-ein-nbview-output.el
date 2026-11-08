@@ -446,7 +446,8 @@ took the prefix of the text after the footer, none at the end)."
          (ein:nbview-toggle-output)
          (ein:nbview-toggle-output-truncation)
          (ein:nbview-clear-output)))
-      (should-not (buffer-modified-p)))))
+      ;; The new and cleared outputs are unsaved changes.
+      (should (ein:notebook-modified-p ein:%notebook%)))))
 
 (ert-deftest ein:nbview-output-image-native-scale ()
   "Raster outputs keep their pixels instead of following the font size."

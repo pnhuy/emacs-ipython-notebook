@@ -859,11 +859,13 @@ the server cannot be reached (saving could not reach it either)."
 SAVED, the content the server acknowledged, leaves NOTEBOOK modified
 when it changed since that copy was taken: the server lacks the change."
   (ein:log 'verbose "Notebook is saved.")
-  (when (or (null saved) (ein:notebook--unchanged-since-p notebook saved))
-    (dolist (ws (ein:$notebook-worksheets notebook))
-      (ein:worksheet-save-cells ws) ; [#]_
-      (ein:worksheet-set-modified-p ws nil))
-    (setf (ein:$notebook-dirty notebook) nil))
+  ;; Mark a mismatch modified, whatever marked it so or not.
+  (let ((unchanged (or (null saved) (ein:notebook--unchanged-since-p notebook saved))))
+    (when unchanged
+      (dolist (ws (ein:$notebook-worksheets notebook))
+        (ein:worksheet-save-cells ws) ; [#]_
+        (ein:worksheet-set-modified-p ws nil)))
+    (setf (ein:$notebook-dirty notebook) (not unchanged)))
   (ein:events-trigger (ein:$notebook-events notebook)
                       'notebook_saved.Notebook)
   (when callback

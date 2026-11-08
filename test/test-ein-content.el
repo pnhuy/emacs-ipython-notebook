@@ -215,6 +215,53 @@ In the cell view they change no buffer text, yet the server lacks them."
             (eintest:save-succeed put "t3"))
           (should-not (ein:notebook-modified-p ein:%notebook%)))))))
 
+;; In the cell view, outputs change no buffer text, so they must mark
+;; the notebook modified themselves.
+
+(defun eintest:clean-cells-notebook-code-cell ()
+  "Mark the current notebook saved; return its first code cell."
+  (ein:notebook-save-notebook-success ein:%notebook%)
+  (should-not (ein:notebook-modified-p ein:%notebook%))
+  (cl-find-if #'ein:codecell-p (ein:view-cells ein:nbview--view)))
+
+(ert-deftest ein:content-output-marks-clean-notebook-modified ()
+  "Output arriving after its execute reply (a background thread) is unsaved."
+  (let ((ein:notebook-view 'cells))
+    (eintest:with-dirty-notebook
+      (let ((cell (eintest:clean-cells-notebook-code-cell)))
+        (ein:cell--handle-output cell "stream" '(:name "stdout" :text "bg\n") nil)
+        (should (ein:notebook-modified-p ein:%notebook%))
+        (ein:notebook-save-notebook-success ein:%notebook%)
+        (ein:cell--handle-output cell "display_data"
+                                 '(:data (:text/plain "a") :metadata nil
+                                         :transient (:display_id "d1"))
+                                 nil)
+        (ein:notebook-save-notebook-success ein:%notebook%)
+        (ein:cell--handle-output cell "update_display_data"
+                                 '(:data (:text/plain "b") :metadata nil
+                                         :transient (:display_id "d1"))
+                                 nil)
+        (should (ein:notebook-modified-p ein:%notebook%))
+        (ein:notebook-save-notebook-success ein:%notebook%)
+        (ein:cell-clear-output cell t t t)
+        (should (ein:notebook-modified-p ein:%notebook%))))))
+
+(ert-deftest ein:content-save-of-clean-notebook-keeps-later-output ()
+  "A save that does not hold the latest output leaves the notebook modified,
+even when nothing else had marked it so."
+  (let ((ein:notebook-view 'cells))
+    (eintest:with-dirty-notebook
+      (let ((cell (eintest:clean-cells-notebook-code-cell)))
+        (setf (ein:$notebook-last-modified ein:%notebook%) "t1")
+        (eintest:with-save-stub "t1"
+          (ein:notebook-save-notebook ein:%notebook%)
+          (let ((put (car (eintest:save-puts))))
+            ;; A change the save lacks that no hook reports.
+            (setf (slot-value cell 'outputs)
+                  (list '(:output_type "stream" :name "stdout" :text "unseen\n")))
+            (eintest:save-succeed put "t2")))
+        (should (ein:notebook-modified-p ein:%notebook%))))))
+
 (ert-deftest ein:content-save-serializes-overlapping-saves ()
   "A save asked for during another waits for it, keeping its callback."
   (eintest:with-dirty-notebook

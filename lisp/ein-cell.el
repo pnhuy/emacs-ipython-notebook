@@ -755,6 +755,15 @@ If END is non-`nil', return the location of next element."
       (ein:view-buffer (ein:cell--view cell))
     (ein:aand (ein:oref-safe cell 'ewoc) (ewoc-buffer it))))
 
+(defun ein:cell--outputs-changed (cell &optional index)
+  "Show CELL's changed outputs (INDEX the new one) and mark them unsaved.
+A view shows outputs without buffer text, so the change must mark the
+worksheet modified itself, as output that arrives later than its
+execute reply (a background thread) gets no reply to mark it."
+  (ein:view-cell-outputs-changed (ein:cell--view cell) cell index)
+  (when-let* ((events (ein:oref-safe cell 'events)))
+    (ein:events-trigger events 'set_dirty.Worksheet (list :value t :cell cell))))
+
 (cl-defmethod ein:cell-clear-output ((cell ein:codecell) stdout stderr other)
   "codecell.js in IPython implements it using timeout and callback.
   As it is unclear why timeout is needed, just clear output
@@ -776,7 +785,7 @@ If END is non-`nil', return the location of next element."
                          (_ other))
                      other))
                  (slot-value cell 'outputs))))
-        (ein:view-cell-outputs-changed (ein:cell--view cell) cell))
+        (ein:cell--outputs-changed cell))
     (ein:cell--ewoc-clear-output cell stdout stderr other)))
 
 (defun ein:cell--ewoc-clear-output (cell stdout stderr other)
@@ -850,7 +859,7 @@ If END is non-`nil', return the location of next element."
   (setf (slot-value cell 'outputs)
         (append (slot-value cell 'outputs) (list json)))
   (if (ein:cell--view cell)
-      (ein:view-cell-outputs-changed (ein:cell--view cell) cell
+      (ein:cell--outputs-changed cell
                                      (1- (ein:cell-num-outputs cell)))
     (ein:cell--ewoc-append-output cell json)))
 
@@ -1178,7 +1187,7 @@ Return non-nil when an output was replaced."
              (when replaced
                (setq changed t)
                (when (ein:cell--view cell)
-                 (ein:view-cell-outputs-changed (ein:cell--view cell) cell))))))
+                 (ein:cell--outputs-changed cell))))))
        ein:cell--display-outputs))
     changed))
 

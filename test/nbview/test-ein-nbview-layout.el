@@ -184,6 +184,47 @@ wider than their `string-width', and the toolbar wrapped to a new line."
         ;; Header and footer rules end within one rule glyph of each other.
         (should (<= (abs (- header footer)) 3))))))
 
+(ert-deftest ein:nbview-layout-rules-follow-window-width ()
+  "Rules are drawn again for a new line width, without the outputs.
+Regression: footers drawn before the buffer had a window kept the
+80 column fallback width."
+  (ein:testing-with-nbview "smoke.ipynb"
+    (save-window-excursion
+      (switch-to-buffer (current-buffer))
+      (let* ((view ein:nbview--view)
+             (code (cadr (ein:view-cells view)))
+             (room 40)
+             (renders 0)
+             (header-length
+              (lambda ()
+                (length (get-text-property (ein:nbview--header-pos view code)
+                                           'display))))
+             (narrow-header nil)
+             (rule-length
+              (lambda ()
+                (let ((s (ein:nbview--footer-rendered view code)))
+                  (string-match "\\([─-]+\\)\n\\'" s)
+                  (length (match-string 1 s))))))
+        (setf (slot-value code 'outputs)
+              (list (list :output_type "stream" :name "stdout" :text "hello\n")))
+        (cl-letf (((symbol-function 'ein:nbview--line-metrics)
+                   (lambda () (cons room #'string-width))))
+          (ein:nbview--render-footer view code)
+          (ein:nbview--window-changed (selected-window))
+          (should (= 40 (funcall rule-length)))
+          (setq narrow-header (funcall header-length))
+          (advice-add 'ein:nbview-render-outputs :before
+                      (lambda (&rest _) (cl-incf renders)) '((name . count)))
+          (unwind-protect
+              (progn
+                (setq room 70)
+                (ein:nbview--window-changed (selected-window))
+                (should (= 70 (funcall rule-length)))
+                (should (string-match-p "hello" (ein:nbview--footer-rendered view code)))
+                (should (= (+ narrow-header 30) (funcall header-length)))
+                (should (= 0 renders)))
+            (advice-remove 'ein:nbview-render-outputs 'count)))))))
+
 (ert-deftest ein:nbview-layout-output-separator ()
   "A rule separates a code cell's source from its outputs, only when it has any."
   (ein:testing-with-nbview "smoke.ipynb"

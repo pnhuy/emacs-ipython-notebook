@@ -57,7 +57,8 @@ the frame shows images, else as Unicode text.
   :package-version '(ein . "0.18"))
 
 (defcustom ein:latex-scale 1.0
-  "Scale of LaTeX images relative to their natural size."
+  "Scale of LaTeX images relative to the default font.
+At 1.0 a formula's em is as large as the default font's."
   :type 'number
   :package-version '(ein . "0.18"))
 
@@ -295,9 +296,35 @@ Keys: `:latex', and `:svg' (dvisvgm) or `:png' (dvipng).")
         (apply #'format "%02X%02X%02X" (mapcar (lambda (x) (round (* 255 x))) rgb))
       "000000")))
 
+(defun ein:latex--font-px ()
+  "Pixel size of the default font: the size of one em in the buffer."
+  (or (ignore-errors
+        (let ((font (face-font 'default)))
+          (and font (aref (font-info font) 2))))
+      (frame-char-height)))
+
+(defun ein:latex--px-per-pt ()
+  "Pixels per TeX point that draw a 10pt em as large as the default font."
+  (* ein:latex-scale (/ (ein:latex--font-px) 10.0)))
+
+(defun ein:latex--png-dpi ()
+  "Resolution at which dvipng renders formulas at the default font size."
+  (round (* 72.27 (ein:latex--px-per-pt))))
+
+(defun ein:latex--svg-height-pt (file)
+  "The height of the SVG FILE in points, or nil."
+  (with-temp-buffer
+    (insert-file-contents file nil 0 2048)
+    (when (re-search-forward "<svg[^>]*?[ \t\n]height=['\"]\\([0-9.]+\\)pt['\"]" nil t)
+      (string-to-number (match-string 1)))))
+
 (defun ein:latex--image (file type)
-  "An image descriptor for FILE of TYPE."
-  (create-image file type nil :ascent 'center :scale ein:latex-scale))
+  "An image descriptor for FILE of TYPE, sized from the default font.
+PNGs are rendered at the matching resolution (`ein:latex--png-dpi');
+SVGs are scaled from their size in points."
+  (let ((pt (and (eq type 'svg) (ein:latex--svg-height-pt file))))
+    (apply #'create-image file type nil :ascent 'center :scale 1
+           (and pt (list :height (max 1 (round (* pt (ein:latex--px-per-pt)))))))))
 
 (defun ein:latex--with-image (text file type)
   "Return TEXT displayed as the image in FILE of image TYPE."
@@ -315,8 +342,11 @@ identifies the requester for `ein:latex-cancel'."
         text
       (let* ((tools (ein:latex--tools))
              (type (if (plist-get tools :svg) 'svg 'png))
-             (key (sha1 (format "%s\0%s\0%s\0%s\0%s" source display
-                                (ein:latex--foreground) ein:latex-scale type)))
+             ;; SVGs scale when shown; PNGs are rendered at a size.
+             (key (sha1 (format "%s\0%s\0%s\0%s" source display
+                                (ein:latex--foreground)
+                                (if (eq type 'svg) type
+                                  (format "%s@%d" type (ein:latex--png-dpi))))))
              (file (expand-file-name (concat key "." (symbol-name type))
                                      ein:latex-cache-directory)))
         (cond
@@ -415,7 +445,7 @@ identifies the requester for `ein:latex-cancel'."
        (if (eq (ein:latex--job-type job) 'svg)
            (list (plist-get tools :svg) "--no-fonts" "--exact-bbox" "-o" "f.svg" "f.dvi")
          (list (plist-get tools :png) "-T" "tight" "-bg" "Transparent"
-               "-D" (number-to-string (round (* 120 ein:latex-scale)))
+               "-D" (number-to-string (ein:latex--png-dpi))
                "-o" "f.png" "f.dvi"))
        #'ein:latex--store))))
 

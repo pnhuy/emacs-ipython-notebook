@@ -63,6 +63,29 @@
       (should (memq 'ein:latex-face (ensure-list (get-text-property 0 'face s))))
       (should-not called))))
 
+(ert-deftest ein:latex-image-matches-font-size ()
+  "Formula images are sized from the buffer's font, not TeX's 10pt.
+Regression: SVGs showed at their natural size in points, far smaller
+than a large or HiDPI default font."
+  (let ((svg (make-temp-file "ein-latex-size-" nil ".svg"))
+        (ein:latex-scale 1.0))
+    (unwind-protect
+        (progn
+          (with-temp-file svg
+            (insert "<?xml version='1.0'?>\n<svg version='1.1' "
+                    "xmlns='http://www.w3.org/2000/svg' width='40pt' "
+                    "height='9pt' viewBox='0 0 40 9'></svg>\n"))
+          (cl-letf (((symbol-function 'ein:latex--font-px) (lambda () 20)))
+            (let ((image (ein:latex--image svg 'svg)))
+              ;; 9pt at a 10pt em, drawn with a 20 pixel em.
+              (should (= 18 (image-property image :height)))
+              (should (= 1 (image-property image :scale))))
+            (let ((ein:latex-scale 1.5))
+              (should (= 27 (image-property (ein:latex--image svg 'svg) :height))))
+            ;; PNGs are rendered at the resolution that gives that size.
+            (should (= 145 (ein:latex--png-dpi)))))
+      (delete-file svg))))
+
 (defun ein:testing-latex-tools-p ()
   (and (executable-find "latex")
        (or (executable-find "dvisvgm") (executable-find "dvipng"))))

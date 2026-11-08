@@ -301,23 +301,30 @@ The selected (or hovered) cell's header ends with its toolbar."
                        (when (buffer-live-p (oref view buffer))
                          (ein:nbview--render-footer view cell))))))
 
-(defun ein:nbview--footer-body (view cell)
-  "Return what VIEW shows below CELL's source: its outputs, then a rule.
-A lighter rule separates outputs from the source."
+(defun ein:nbview--footer-outputs (view cell)
+  "Return CELL's outputs as VIEW shows them, or \"\" when it has none."
   (let ((outputs (and (ein:codecell-p cell) (ein:oref-safe cell 'outputs))))
-    (concat
-     (and outputs (concat (ein:nbview--output-rule) "\n"))
-     (cond ((null outputs) "")
-           ((ein:oref-safe cell 'collapsed)
-            (propertize "[outputs hidden]\n" 'face 'ein:nbview-prompt))
-           (t (let ((s (ein:nbview-render-outputs
-                        outputs (ein:nbview--output-context view cell))))
-                (if (ein:nbview--outputs-expanded-p cell)
-                    s
-                  (ein:nbview-output-truncate
-                   s ein:nbview-output-max-lines
-                   (lambda () (ein:nbview--set-outputs-expanded view cell t)))))))
-     (ein:nbview--rule) "\n")))
+    (cond ((null outputs) "")
+          ((ein:oref-safe cell 'collapsed)
+           (propertize "[outputs hidden]\n" 'face 'ein:nbview-prompt))
+          (t (let ((s (ein:nbview-render-outputs
+                       outputs (ein:nbview--output-context view cell))))
+               (if (ein:nbview--outputs-expanded-p cell)
+                   s
+                 (ein:nbview-output-truncate
+                  s ein:nbview-output-max-lines
+                  (lambda () (ein:nbview--set-outputs-expanded view cell t)))))))))
+
+(defun ein:nbview--footer-compose (outputs)
+  "Return the footer body showing OUTPUTS, a rendered string, then a rule.
+A lighter rule separates outputs from the source."
+  (concat (if (string-empty-p outputs) ""
+            (concat (ein:nbview--output-rule) "\n" outputs))
+          (ein:nbview--rule) "\n"))
+
+(defun ein:nbview--footer-body (view cell)
+  "Return what VIEW shows below CELL's source: its outputs, then a rule."
+  (ein:nbview--footer-compose (ein:nbview--footer-outputs view cell)))
 
 (defun ein:nbview--header-string (cell)
   "Return CELL's header character."
@@ -521,8 +528,36 @@ nested in a `display' string, and overlays never touch the undo list.
 See `ein:nbview--apply-footer-bar' for its shape."
   (with-current-buffer (oref view buffer)
     (when-let* ((ov (ein:nbview--footer-overlay view cell t)))
-      (overlay-put ov 'ein-nbview-body (ein:nbview--footer-body view cell))
+      (let ((outputs (ein:nbview--footer-outputs view cell)))
+        (overlay-put ov 'ein-nbview-outputs outputs)
+        (overlay-put ov 'ein-nbview-body (ein:nbview--footer-compose outputs)))
       (ein:nbview--apply-footer-bar view cell ov))))
+
+(defun ein:nbview--refresh-rules (view)
+  "Draw the rules of every cell in VIEW again, for a new line width.
+Outputs are not rendered again."
+  (with-current-buffer (oref view buffer)
+    (dolist (cell (ein:view-cells view))
+      (ein:nbview--render-header view cell)
+      (when-let* ((ov (ein:nbview--footer-overlay view cell)))
+        (overlay-put ov 'ein-nbview-body
+                     (ein:nbview--footer-compose
+                      (or (overlay-get ov 'ein-nbview-outputs) "")))
+        (ein:nbview--apply-footer-bar view cell ov)))))
+
+(defvar-local ein:nbview--rule-room nil
+  "The line width that the cell rules were last drawn for.")
+
+(defun ein:nbview--window-changed (&optional window)
+  "Redraw the cell rules when the line width of WINDOW's notebook changed.
+Rules are sized when drawn, also before the buffer has a window."
+  (with-current-buffer (if (windowp window) (window-buffer window) (current-buffer))
+    (when-let* ((view ein:nbview--view)
+                ((get-buffer-window (current-buffer) t))
+                (room (car (ein:nbview--line-metrics)))
+                ((not (eql room ein:nbview--rule-room))))
+      (setq ein:nbview--rule-room room)
+      (ein:nbview--refresh-rules view))))
 
 (defun ein:nbview--footer-rendered (view cell)
   "The string VIEW shows below CELL's source, or nil.
@@ -1474,6 +1509,9 @@ BUFFER defaults to the current buffer.  Return FN's value."
   (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--input-enter-edit nil t)
   (jit-lock-register #'ein:nbview--jit-decorate)
   (add-hook 'post-command-hook #'ein:nbview--post-command nil t)
+  (add-hook 'window-size-change-functions #'ein:nbview--window-changed nil t)
+  (add-hook 'window-buffer-change-functions #'ein:nbview--window-changed nil t)
+  (add-hook 'text-scale-mode-hook #'ein:nbview--window-changed nil t)
   (add-hook 'ein:nbview-enter-edit-hook #'ein:nbview--preview-enter-edit nil t)
   (add-hook 'ein:nbview-leave-edit-hook #'ein:nbview--preview-leave-edit nil t)
   ;; Global: one call refreshes every cells-view buffer.

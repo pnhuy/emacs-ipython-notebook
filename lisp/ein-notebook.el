@@ -904,21 +904,37 @@ NAME is any non-empty string that does not contain '/' or '\\'."
     (ein:content-rename content path #'ein:notebook-rename-success
                         (list notebook content))))
 
+(defun ein:notebook--copy-path (path)
+  "A default path for a copy of the notebook at PATH."
+  (concat (file-name-sans-extension path) "-Copy.ipynb"))
+
 (defun ein:notebook-save-to-command (path)
-  "Make a copy of the notebook and save it to a new path specified by NAME.
-NAME is any non-empty string that does not contain '/' or '\\'.
-"
+  "Save a copy of the notebook to PATH on the same server, and open it.
+Asks before replacing a notebook that already exists at PATH."
   (interactive
-   (list (read-string "Save copy to: " (ein:$notebook-notebook-path ein:%notebook%))))
-  (unless (and (string-match ".ipynb" path) (= (match-end 0) (length path)))
+   (list (read-string "Save copy to: "
+                      (ein:notebook--copy-path
+                       (ein:$notebook-notebook-path ein:%notebook%)))))
+  (unless (and (string-match "\\.ipynb" path) (= (match-end 0) (length path)))
     (setq path (format "%s.ipynb" path)))
-  (let* ((content (ein:content-from-notebook ein:%notebook%))
-         (name (substring path (or (cl-position ?/ path :from-end t) 0))))
-    (setf (ein:$content-path content) path
-          (ein:$content-name content) name)
-    (ein:content-save content #'ein:notebook-open
-                      (list (ein:$notebook-url-or-port ein:%notebook%)
-                            path))))
+  (let* ((notebook ein:%notebook%)
+         (url-or-port (ein:$notebook-url-or-port notebook)))
+    (when (equal path (ein:$notebook-notebook-path notebook))
+      (user-error "That is this notebook; save it with C-x C-s"))
+    (ein:content-query-exists
+     url-or-port path
+     (lambda (exists)
+       (when (or (null exists)
+                 (yes-or-no-p
+                  (if (eq exists :error)
+                      (format "Could not check whether %s exists.  Save the copy anyway? " path)
+                    (format "%s exists.  Replace it with this notebook? " path))))
+         (let ((content (ein:content-from-notebook notebook))
+               (name (file-name-nondirectory path)))
+           (setf (ein:$content-path content) path
+                 (ein:$content-name content) name)
+           (ein:content-save content #'ein:notebook-open
+                             (list url-or-port path))))))))
 
 (cl-defun ein:notebook-rename-success (notebook content)
   (ein:notebook-remove-opened-notebook notebook)

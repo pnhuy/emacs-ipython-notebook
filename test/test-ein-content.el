@@ -221,3 +221,55 @@ callbacks)."
           (eintest:with-save-stub :fail
             (ein:notebook-save-notebook ein:%notebook%)
             (should (= 1 (length (eintest:save-puts))))))))))
+
+;;; Save copy
+
+(defmacro eintest:with-copy-stub (exists &rest body)
+  "Run BODY with HTTP stubbed: GET answers EXISTS (t, nil for 404, or
+`:error'), PUT is recorded."
+  (declare (indent 1))
+  `(let ((eintest:save-requests nil))
+     (cl-letf (((symbol-function 'ein:query-singleton-ajax)
+                (lambda (url &rest settings)
+                  (let ((type (plist-get settings :type)))
+                    (push (list type url settings) eintest:save-requests)
+                    (when (equal type "GET")
+                      (pcase ,exists
+                        ('t (funcall (plist-get settings :success) :data nil))
+                        ('nil (funcall (plist-get settings :error)
+                                       :response (make-request-response :status-code 404)))
+                        (_ (funcall (plist-get settings :error)
+                                    :response (make-request-response :status-code 500)))))))))
+       ,@body)))
+
+(ert-deftest ein:content-save-copy-asks-before-replacing ()
+  "Copying onto an existing notebook asks; declining sends no PUT."
+  (eintest:with-dirty-notebook
+    (dolist (exists '(t :error))
+      (let (asked)
+        (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_p) (setq asked t) nil)))
+          (eintest:with-copy-stub exists
+            (ein:notebook-save-to-command "other.ipynb")
+            (should asked)
+            (should-not (eintest:save-puts))))))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_p) t))
+              ((symbol-function 'ein:notebook-open) #'ignore))
+      (eintest:with-copy-stub t
+        (ein:notebook-save-to-command "other")
+        (should (string-suffix-p "other.ipynb" (nth 1 (car (eintest:save-puts)))))))))
+
+(ert-deftest ein:content-save-copy-to-new-path ()
+  "A new path is saved without asking; this notebook's own path is refused."
+  (eintest:with-dirty-notebook
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (_p) (error "Should not ask")))
+              ((symbol-function 'ein:notebook-open) #'ignore))
+      (eintest:with-copy-stub nil
+        (ein:notebook-save-to-command "dir/new.ipynb")
+        (let ((content (ein:json-read-from-string
+                        (eintest:save-body (car (eintest:save-puts))))))
+          (should (equal "dir/new.ipynb" (plist-get content :path)))
+          (should (equal "new.ipynb" (plist-get content :name)))))
+      (should-error (ein:notebook-save-to-command
+                     (ein:$notebook-notebook-path ein:%notebook%))
+                    :type 'user-error))
+    (should (equal "a/b-Copy.ipynb" (ein:notebook--copy-path "a/b.ipynb")))))

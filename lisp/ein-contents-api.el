@@ -310,6 +310,22 @@ failed.  Uses GET ?content=0, which does not transfer the notebook."
    :error (cl-function
            (lambda (&rest _) (funcall callback :error)))))
 
+(defun ein:content-query-exists (url-or-port path callback)
+  "Call CALLBACK with t if PATH exists on URL-OR-PORT, nil if it does not,
+or `:error' when the server could not tell."
+  (ein:query-singleton-ajax
+   (concat (ein:notebooklist-url url-or-port path) "?content=0")
+   :type "GET"
+   :parser #'ein:json-read
+   :success (cl-function (lambda (&rest _) (funcall callback t)))
+   :error (cl-function
+           (lambda (&key response &allow-other-keys)
+             (funcall callback
+                      (if (and response
+                               (eql 404 (request-response-status-code response)))
+                          nil
+                        :error))))))
+
 (defun ein:content-rename (content new-path &optional callback cbargs)
   (ein:query-singleton-ajax
    (ein:content-url content)

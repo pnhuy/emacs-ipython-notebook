@@ -30,18 +30,18 @@
 ;; Emacs IPython Notebook (EIN), despite its name, is a jupyter client for all
 ;; languages.  It does not work under non-WSL Windows environments.
 ;;
-;; As of 2023, EIN has been sunset for a number of years having been
-;; unable to keep up with jupyter's web-first ecosystem.  Even during
-;; its heyday EIN never fully reconciled emac's monolithic buffer
-;; architecture to the notebook's by-cell discretization, leaving
-;; gaping functional holes like crippled undo.
+;; This fork adds a cells view, the default: each cell is a separate block
+;; edited in place, Markdown cells show a preview until you edit them, and
+;; outputs (text, tracebacks, images, tables, LaTeX) appear under their cell.
+;; Command and edit states give Jupyter-style keys, and undo covers text
+;; edits and cell inserts, deletes, moves, type changes, splits and merges.
+;; It is tested against Jupyter Server 2.x on Linux.  LSP (eglot) is not
+;; supported in cells; see Limitations.
 ;;
-;; **As of 2025, a greenfield notebook implementation resides at,**
-;;
-;; https://github.com/commercial-emacs/xjupyter.git
-;;
-;; It features full-fledged undo and relies on "mode overlays"
-;; instead of the complex and fragile polymode.
+;; Upstream EIN was sunset in 2023.  Its original interface is kept as the
+;; classic view, with its old limitations, such as structural edits that
+;; cannot be undone.  Upstream's maintainer has since started a separate
+;; client, https://github.com/commercial-emacs/xjupyter.git.
 
 ;;; Code:
 

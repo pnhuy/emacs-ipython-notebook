@@ -140,10 +140,20 @@ Buffer kept modified; fix and retry" (error-message-string err))))))
 (defvar *ein:content-hierarchy* (make-hash-table :test #'equal)
   "Content tree keyed by URL-OR-PORT.")
 
+(defvar ein:content-hierarchy-skip-functions nil
+  "Functions of URL-OR-PORT; when one returns non-nil, its tree is not listed.
+For a server rooted at a broad directory such as /, listing the tree
+at login only issues dozens of useless requests.")
+
+(defun ein:content--skip-hierarchy-p (url-or-port)
+  (run-hook-with-args-until-success 'ein:content-hierarchy-skip-functions
+                                    url-or-port))
+
 (defun ein:content-need-hierarchy (url-or-port)
   "Callers assume ein:content-query-hierarchy succeeded.  If not, nil."
   (aif (gethash url-or-port *ein:content-hierarchy*) it
-    (ein:log 'warn "No recorded content hierarchy for %s" url-or-port)
+    (unless (ein:content--skip-hierarchy-p url-or-port)
+      (ein:log 'warn "No recorded content hierarchy for %s" url-or-port))
     nil))
 
 (defun ein:new-content (url-or-port path data)
@@ -224,6 +234,11 @@ other field sees null as nil."
 (defun ein:content-query-hierarchy (url-or-port &optional callback)
   "Get hierarchy of URL-OR-PORT with CALLBACK arity 1 for which hierarchy."
   (setq callback (or callback #'ignore))
+  (if (ein:content--skip-hierarchy-p url-or-port)
+      (funcall callback nil)
+    (ein:content-query-hierarchy--1 url-or-port callback)))
+
+(defun ein:content-query-hierarchy--1 (url-or-port callback)
   (ein:content-query-sessions
    url-or-port
    (apply-partially (lambda (url-or-port* callback* sessions)

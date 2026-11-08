@@ -166,6 +166,39 @@ And I don't know if I can on account of the dont-save-cells nonsense."
       spec
     (plist-put spec :name name)))
 
+(defun ein:notebook--kernelspec-metadata (kernelspec)
+  "The kernelspec member of ipynb metadata for KERNELSPEC.
+A kernel EIN made for one machine's Python environment names a
+portable kernel instead, so the notebook opens elsewhere."
+  (if-let* ((portable (plist-get (plist-get (ein:$kernelspec-spec kernelspec) :metadata)
+                                 :ein_portable)))
+      (copy-sequence portable)
+    (ein:notebook--spec-insert-name (ein:$kernelspec-name kernelspec)
+                                    (ein:$kernelspec-spec kernelspec))))
+
+(defvar ein:notebook-session-kernel-functions nil
+  "Abnormal hook choosing the kernel a notebook's session starts with.
+Each function takes the NOTEBOOK being opened, whose kernelspec comes
+from its metadata, and returns a kernel name or nil.  The first name
+the server knows wins.  The notebook's metadata is not changed.")
+
+(defvar ein:notebook--session-kernels (make-hash-table :test #'equal)
+  "(URL-OR-PORT . PATH) to the kernel chosen with `ein:notebook-switch-kernel'.
+Lasts for this Emacs session.")
+
+(defun ein:notebook--apply-session-kernel (notebook)
+  "Pick NOTEBOOK's kernel: the one last switched to in this Emacs, else
+the first of `ein:notebook-session-kernel-functions'."
+  (when-let* ((name (or (gethash (cons (ein:$notebook-url-or-port notebook)
+                                       (ein:$notebook-notebook-path notebook))
+                                 ein:notebook--session-kernels)
+                        (run-hook-with-args-until-success
+                         'ein:notebook-session-kernel-functions notebook))))
+    (if-let* ((kernelspec (ein:get-kernelspec (ein:$notebook-url-or-port notebook) name)))
+        (setf (ein:$notebook-kernelspec notebook) kernelspec)
+      (ein:log 'warn "Kernel %s is unknown to %s; keeping the notebook's kernel"
+               name (ein:$notebook-url-or-port notebook)))))
+
 (defun ein:notebook-open--decorate-callback (notebook existing pending-clear callback no-pop)
   "In addition to CALLBACK,
 clear the pending semaphore,
@@ -193,9 +226,7 @@ and put last warning in minibuffer."
        (awhen (ein:$notebook-kernelspec notebook*)
          (setf (ein:$notebook-metadata notebook*)
                (plist-put (ein:$notebook-metadata notebook*)
-                          :kernelspec (ein:notebook--spec-insert-name
-                                       (ein:$kernelspec-name it)
-                                       (ein:$kernelspec-spec it))))))
+                          :kernelspec (ein:notebook--kernelspec-metadata it)))))
      (when callback*
        (funcall callback* notebook* created))
      (-when-let* ((created created)
@@ -268,6 +299,7 @@ where `created' indicates a new notebook or an existing one."
         (ein:$notebook-notebook-name notebook) (ein:$content-name content))
   (ein:notebook-bind-events notebook (ein:events-new))
   (ein:notebook-set-kernelspec notebook (plist-get (ein:$content-raw-content content) :metadata))
+  (ein:notebook--apply-session-kernel notebook)
   (ein:notebook-install-kernel notebook)
   (ein:notebook-from-json notebook (ein:$content-raw-content content)
                           (ein:$content-json content))
@@ -372,10 +404,12 @@ notebook buffer then the user will be prompted to select an opened notebook."
   (let* ((kernelspec (ein:get-kernelspec
                       (ein:$notebook-url-or-port notebook) kernel-name)))
     (setf (ein:$notebook-kernelspec notebook) kernelspec)
+    (puthash (cons (ein:$notebook-url-or-port notebook)
+                   (ein:$notebook-notebook-path notebook))
+             kernel-name ein:notebook--session-kernels)
     (setf (ein:$notebook-metadata notebook)
           (plist-put (ein:$notebook-metadata notebook)
-                     :kernelspec (ein:notebook--spec-insert-name
-                                  (ein:$kernelspec-name kernelspec) (ein:$kernelspec-spec kernelspec))))
+                     :kernelspec (ein:notebook--kernelspec-metadata kernelspec)))
     (ein:notebook-save-notebook notebook #'ein:notebook-kill-kernel-then-close-command
                                 (list notebook))
     (cl-loop repeat 10

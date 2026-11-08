@@ -26,6 +26,7 @@
 (require 'ein-core)
 (require 'ein-notebooklist)
 (require 'ein-dev)
+(require 'ein-pyenv)
 (require 'exec-path-from-shell nil t)
 (autoload 'ein:gat-chain "ein-gat")
 (autoload 'ein:gat-project "ein-gat")
@@ -136,6 +137,47 @@ with the call to the jupyter notebook."
   :group 'ein
   :type 'directory)
 
+(defcustom ein:jupyter-implicit-root "/"
+  "Root of the server EIN starts by itself to open a notebook file.
+Visiting an ipynb file reuses any running server whose root contains
+it; otherwise EIN starts a server here.  The root only bounds which
+files the server can open: each kernel still starts in its own
+notebook's directory.  The default lets one server open notebooks
+anywhere on the file system."
+  :group 'ein
+  :type 'directory)
+
+(defconst ein:jupyter-implicit-server-args
+  '("--ContentsManager.allow_hidden=True")
+  "Extra arguments for the implicit server.
+With a broad root, notebooks under dot directories (~/.cache, a
+project's .venv) are ordinary files, not hidden ones.")
+
+(defun ein:jupyter--implicit-server-url-p (url-or-port)
+  "Non-nil when URL-OR-PORT is our server rooted at `ein:jupyter-implicit-root'."
+  (when-let* ((proc (ein:jupyter-server-process))
+              (dir (ein:jupyter-running-notebook-directory)))
+    (and (equal (file-name-as-directory (expand-file-name dir))
+                (file-name-as-directory (expand-file-name ein:jupyter-implicit-root)))
+         (let ((url (or (process-get proc 'ein-url)
+                        (let ((found (ein:jupyter-my-url-or-port)))
+                          (process-put proc 'ein-url found)
+                          found))))
+           (and url (equal (ein:url url-or-port) (ein:url url)))))))
+
+(add-hook 'ein:content-hierarchy-skip-functions #'ein:jupyter--implicit-server-url-p)
+
+(defun ein:jupyter--process-environment ()
+  "`process-environment' for a server EIN starts.
+Puts `ein:pyenv-data-directory' first on JUPYTER_PATH."
+  (let ((dir (directory-file-name (expand-file-name ein:pyenv-data-directory)))
+        (old (getenv "JUPYTER_PATH")))
+    (cons (concat "JUPYTER_PATH=" dir
+                  (if (and old (not (string-empty-p old)))
+                      (concat path-separator old)
+                    ""))
+          process-environment)))
+
 (defun ein:jupyter--kernelspec-choices (command)
   "Return (NAME . DISPLAY-NAME) for each kernelspec COMMAND lists.
 Runs COMMAND without a shell, so the user's login shell (fish,
@@ -235,8 +277,12 @@ with `kubectl exec'."
                                  (when (ein:debug-p)
                                    (cl-pushnew "--debug" copy :test #'equal))
                                  copy)))))
-         (proc (apply #'start-process
-                      *ein:jupyter-server-process-name* buf cmd vargs)))
+         (proc (let ((process-environment
+                      (if ein:jupyter-use-containers
+                          process-environment
+                        (ein:jupyter--process-environment))))
+                 (apply #'start-process
+                        *ein:jupyter-server-process-name* buf cmd vargs))))
     (ein:log 'info "ein:jupyter-server--run: %s %s" cmd (ein:join-str " " vargs))
     (set-process-query-on-exit-flag proc nil)
     (set-process-filter proc #'ein:jupyter--server-filter)
@@ -362,10 +408,12 @@ of (PASSWORD TOKEN)."
 ;;;###autoload
 (defun ein:jupyter-server-start (server-command
                                  notebook-directory
-                                 &optional no-login-p login-callback port)
+                                 &optional no-login-p login-callback port
+                                 extra-args)
   "Start SERVER-COMMAND with `--notebook-dir' NOTEBOOK-DIRECTORY.
 
 Login after connection established unless NO-LOGIN-P is set.
+EXTRA-ARGS are more command line arguments for the server.
 LOGIN-CALLBACK takes two arguments, the buffer created by
 `ein:notebooklist-open--finish', and the url-or-port argument
 of `ein:notebooklist-open*'.
@@ -410,9 +458,11 @@ server command."
   (let ((proc (ein:jupyter-server--run *ein:jupyter-server-buffer-name*
                                        server-command
                                        notebook-directory
-                                       (when (numberp port)
-                                         `("--port" ,(format "%s" port)
-                                           "--port-retries" "0")))))
+                                       (append
+                                        (when (numberp port)
+                                          `("--port" ,(format "%s" port)
+                                            "--port-retries" "0"))
+                                        extra-args))))
     (if-let* (((ein:jupyter--wait-until-ready proc ein:jupyter-server-startup-timeout))
               (buffer (get-buffer *ein:jupyter-server-buffer-name*))
               (url-or-port (ein:jupyter-my-url-or-port)))

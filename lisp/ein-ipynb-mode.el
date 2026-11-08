@@ -29,6 +29,52 @@
 (require 'ein-process)
 (require 'js)
 
+(defcustom ein:ipynb-open-as-notebook t
+  "Non-nil means visiting an ipynb file opens it as a notebook.
+As in VS Code, the file opens where it is, on a Jupyter server EIN
+starts when needed (see `ein:open').  It happens when the file's
+buffer is shown in the selected window, so `find-file-noselect' and
+previews while the minibuffer is active do not start servers.  Use
+`find-file-literally', or set this to nil, to see the JSON."
+  :type 'boolean
+  :group 'ein)
+
+(defvar-local ein:ipynb--auto-opened nil
+  "Non-nil once this buffer was opened as a notebook automatically.")
+(put 'ein:ipynb--auto-opened 'permanent-local t)
+
+(defun ein:ipynb--auto-open-p (buffer)
+  "Non-nil when BUFFER should now be opened as a notebook."
+  (and ein:ipynb-open-as-notebook
+       (not noninteractive)
+       (buffer-live-p buffer)
+       (eq (window-buffer (selected-window)) buffer)
+       (not (active-minibuffer-window))
+       (with-current-buffer buffer
+         (and (derived-mode-p 'ein:ipynb-mode)
+              (not ein:ipynb--auto-opened)
+              buffer-file-name
+              (not (file-remote-p buffer-file-name))
+              (not (buffer-modified-p))))))
+
+(defun ein:ipynb--open (buffer)
+  "Open BUFFER's file as a notebook; on failure, leave BUFFER as is."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (condition-case err
+          (ein:process-open-notebook buffer-file-name #'kill-buffer-if-not-modified)
+        (error (message "Showing %s as JSON: %s"
+                        (file-name-nondirectory buffer-file-name)
+                        (error-message-string err)))))))
+
+(defun ein:ipynb--maybe-open (window)
+  "Open the buffer of WINDOW as a notebook if it is time to."
+  (let ((buffer (window-buffer window)))
+    (when (ein:ipynb--auto-open-p buffer)
+      (with-current-buffer buffer
+        (setq ein:ipynb--auto-opened t))
+      (run-at-time 0 nil #'ein:ipynb--open buffer))))
+
 ;;;###autoload
 (define-derived-mode ein:ipynb-mode js-mode "ein:ipynb"
   "A simple mode for ipynb file.
@@ -36,6 +82,8 @@
 \\{ein:ipynb-mode-map}
 "
   :group 'ein
+  (add-hook 'window-buffer-change-functions #'ein:ipynb--maybe-open nil t)
+  (add-hook 'window-selection-change-functions #'ein:ipynb--maybe-open nil t)
   :after-hook
   (let* ((filename (file-name-nondirectory buffer-file-truename))
          (remote-filename (concat (file-name-as-directory "run-remote") filename)))

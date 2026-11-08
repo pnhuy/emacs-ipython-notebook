@@ -63,11 +63,11 @@
           (let ((out (ein:testing-autoloads--run
                       dir
                       "(require 'ein)"
-                      "(princ (format \"CMDS=%S\" (mapcar #'commandp '(ein:run ein:login ein:stop ein:notebooklist-open))))"
+                      "(princ (format \"CMDS=%S\" (mapcar #'commandp '(ein:run ein:login ein:stop ein:notebooklist-open ein:open ein:select-python-environment))))"
                       "(princ (format \" CRIB=%S\" (fboundp 'ein:jupyter-crib-running-servers)))"
                       ;; The interactive spec of `ein:login' calls it.
                       "(princ (format \" SPEC=%S\" (condition-case err (progn (require 'ein-notebooklist) (cl-letf (((symbol-function 'ein:completing-read) (lambda (&rest _) \"8888\"))) (funcall-interactively (lambda () (interactive) (advice-eval-interactive-spec (cadr (interactive-form 'ein:notebooklist-login)))))) 'ok) (error (car err)))))")))
-            (should (string-match-p "CMDS=(t t t t)" out))
+            (should (string-match-p "CMDS=(t t t t t t)" out))
             (should (string-match-p "CRIB=t" out))
             (should (string-match-p "SPEC=ok" out))))
       (delete-directory dir t))))

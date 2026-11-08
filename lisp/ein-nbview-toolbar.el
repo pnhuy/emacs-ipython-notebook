@@ -30,11 +30,13 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'seq)
 (require 'eieio)
 (require 'ein-core)
 (require 'ein-classes)
 (require 'ein-events)
 (require 'ein-view)
+(require 'ein-pyenv)
 
 (declare-function ein:nbview--current-view "ein-nbview")
 (declare-function ein:nbview--cell-or-error "ein-nbview")
@@ -333,14 +335,33 @@ Asks first when this Emacs did not start it or other sessions share it."
   (interactive)
   (ein:nbview-insert-cell-below "markdown"))
 
+(defun ein:nbview--kernel-choices (notebook)
+  "Alist (LABEL . ACTION) for the kernel picker of NOTEBOOK.
+ACTION is a kernel name, or (python . PYTHON) for an environment."
+  (let ((kernels (mapcar (lambda (k) (cons (cdr k) (car k)))
+                         (seq-remove (lambda (k) (string-prefix-p "ein-venv-" (car k)))
+                                     (ein:list-available-kernels
+                                      (ein:$notebook-url-or-port notebook)))))
+        (envs (mapcar (lambda (e) (cons (concat "Python environment: " (car e))
+                                        (cons 'python (cdr e))))
+                      (ein:pyenv-environments (ein:pyenv--notebook-file notebook)))))
+    (append kernels envs
+            (list (cons "Python environment: other executable..." '(python))))))
+
 (defun ein:nbview-select-kernel (kernel-name)
-  "Switch the notebook to the kernel KERNEL-NAME."
+  "Switch the notebook to the kernel KERNEL-NAME.
+Interactively, Python environments are offered too, as in
+`ein:select-python-environment'."
   (interactive
-   (let ((kernels (ein:list-available-kernels
-                   (ein:$notebook-url-or-port (ein:nbview--notebook)))))
-     (list (let ((choice (completing-read "Select kernel: " kernels nil t)))
-             (or (car (rassoc choice kernels)) choice)))))
-  (ein:notebook-switch-kernel (ein:nbview--notebook) kernel-name))
+   (let* ((notebook (ein:nbview--notebook))
+          (choices (ein:nbview--kernel-choices notebook))
+          (choice (completing-read "Select kernel: " choices nil t)))
+     (list (cdr (assoc choice choices)))))
+  (let ((notebook (ein:nbview--notebook)))
+    (pcase kernel-name
+      (`(python . ,python)
+       (ein:pyenv-use-python notebook (or python (ein:pyenv-read-python))))
+      (_ (ein:notebook-switch-kernel notebook kernel-name)))))
 
 (defun ein:nbview-copy-source ()
   "Copy the current cell's source to the kill ring."

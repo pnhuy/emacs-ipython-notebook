@@ -111,11 +111,42 @@ verified.
 
 Usage
 =====
-Start EIN using **ONE** of the following:
+Open any notebook the way you open any file:
 
-* Open an ``.ipynb`` file, press ``C-c C-o``, or,
-* ``M-x ein:run`` launches a jupyter process from emacs, or,
-* ``M-x ein:login`` to a running jupyter server, or,
+* Visit an ``.ipynb`` file (``C-x C-f``, dired, a project finder).  With
+  ``ein:ipynb-mode`` on ``auto-mode-alist`` it opens as a notebook when it
+  is shown in a window (set ``ein:ipynb-open-as-notebook`` to ``nil`` to see
+  the JSON and press ``C-c C-o`` instead), or,
+* ``M-x ein:open`` reads a file name; a name that does not exist yet becomes
+  a new, empty notebook.
+
+There is no root folder to choose and no server to start by hand.  EIN starts
+one Jupyter server in the background, rooted at ``ein:jupyter-implicit-root``
+(``/`` by default), and reuses it for every notebook, in any directory.  The
+kernel runs in the notebook's own directory.  Opening a notebook never runs
+its cells.
+
+The kernel comes from the notebook's Python environment, as in VS Code:
+
+* The nearest ``.venv``, ``venv`` or ``env`` above the notebook is used when
+  it has ``ipykernel``.  EIN asks once per environment before running a
+  project's Python (``ein:pyenv-auto-select``).
+* ``M-x ein:select-python-environment`` (or the kernel menu in the notebook
+  toolbar) picks any environment: the project's, the active ``VIRTUAL_ENV`` or
+  ``CONDA_PREFIX``, ``~/.virtualenvs``, pyenv and conda environments, or any
+  Python executable.  The choice is remembered per notebook, and EIN offers to
+  ``pip install ipykernel`` into it when missing.
+* The saved notebook keeps a portable ``python3`` kernelspec, so it opens
+  unchanged in Jupyter and VS Code.
+
+The previous workflows still work:
+
+* ``M-x ein:run`` launches a jupyter process for a chosen directory and lists
+  its notebooks, or,
+* ``M-x ein:login`` to a running jupyter server (local or remote).
+
+A notebook under the root of a local jupyter server that is already running
+opens on that server.
 
 ``M-x ein:stop`` prompts to halt local and remote jupyter services.
 
@@ -142,8 +173,8 @@ The view has two states, as in Jupyter:
 
 Walkthrough
 -----------
-1. Open a notebook (``M-x ein:run`` or ``M-x ein:login``, then pick it in
-   the notebook list).  Nothing is executed on open.
+1. Open a notebook (visit the file, or ``M-x ein:open``).  Nothing is
+   executed on open.
 2. Press ``b`` to add a code cell below, ``RET`` to edit it, and type
    ``import math; math.pi``.
 3. Press ``S-RET``: the cell runs, its output appears below it, and the next

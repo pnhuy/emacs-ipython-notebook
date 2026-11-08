@@ -26,6 +26,7 @@
 ;;; Code:
 
 (require 'ein-jupyter)
+(require 'ein-pyenv)
 
 (defcustom ein:process-jupyter-regexp "\\(jupyter\\|ipython\\)\\(-\\|\\s-+\\)note"
   "Regexp by which we recognize notebook servers."
@@ -140,11 +141,20 @@ Supply ERROR-BUFFER to capture stderr."
                   (ein:log 'warn "ein:process-refresh-processes: server pid %s has no root_dir"
                            pid)))))
 
+(defun ein:process--in-dir-p (filename dir)
+  "Non-nil when FILENAME lies under directory DIR."
+  (string-prefix-p (file-name-as-directory (expand-file-name dir))
+                   (expand-file-name filename)))
+
 (defun ein:process-dir-match (filename)
-  "Return ein:process whose directory is prefix of FILENAME."
-  (cl-loop for dir in (hash-table-keys ein:%processes%)
-        when (cl-search dir filename)
-        return (gethash dir ein:%processes%)))
+  "Return the ein:process whose root contains FILENAME.
+When several do, the one with the deepest root."
+  (let (best)
+    (dolist (dir (hash-table-keys ein:%processes%))
+      (when (and (ein:process--in-dir-p filename dir)
+                 (or (null best) (> (length dir) (length best))))
+        (setq best dir)))
+    (and best (gethash best ein:%processes%))))
 
 (defun ein:process-url-match (url-or-port)
   "Return ein:process whose url matches URL-OR-PORT."
@@ -163,21 +173,70 @@ Supply ERROR-BUFFER to capture stderr."
   "Construct path by eliding PROC's dir from filename."
   (cl-subseq filename (length (file-name-as-directory (ein:$process-dir proc)))))
 
-(defun ein:process-open-notebook* (filename callback)
+(defun ein:process--root-path (root filename)
+  "FILENAME as a contents path relative to server ROOT."
+  (substring (expand-file-name filename)
+             (length (file-name-as-directory (expand-file-name root)))))
+
+(defconst ein:process-empty-notebook
+  "{\n \"cells\": [],\n \"metadata\": {},\n \"nbformat\": 4,\n \"nbformat_minor\": 5\n}\n"
+  "Contents written to a new, empty notebook file.")
+
+(defun ein:process--ensure-notebook-file (filename)
+  "Give FILENAME the contents of an empty notebook when it has none.
+Never touches a file that has contents."
+  (unless (and (file-exists-p filename)
+               (> (or (file-attribute-size (file-attributes filename)) 0) 0))
+    (make-directory (file-name-directory filename) t)
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region ein:process-empty-notebook nil filename nil 'silent))))
+
+(defun ein:process--open (url-or-port path filename callback no-pop)
+  "Open notebook PATH on URL-OR-PORT, for local FILENAME.
+Kernels from FILENAME's Python environment are arranged first."
+  (ein:pyenv-prepare filename url-or-port path
+                     (lambda ()
+                       (ein:notebook-open url-or-port path nil callback nil no-pop))))
+
+(defun ein:process-open-notebook* (filename callback &optional no-pop)
   "Open FILENAME as a notebook and start a notebook server if necessary.
-CALLBACK with arity 2 (passed into `ein:notebook-open--callback')."
+A running server whose root contains FILENAME is reused.  Otherwise
+EIN starts its own server at `ein:jupyter-implicit-root'.  No
+notebook list is shown.  CALLBACK with arity 2 (passed into
+`ein:notebook-open--callback').  NO-POP leaves showing the notebook
+to CALLBACK."
   (ein:process-refresh-processes)
-  (let* ((proc (ein:process-dir-match filename)))
-    (if proc
-        (let* ((url-or-port (ein:process-url-or-port proc))
-               (path (ein:process-path proc filename))
-               (callback2 (apply-partially (lambda (path* callback* _buffer url-or-port)
-                                             (ein:notebook-open
-                                              url-or-port path* nil callback*))
-                                           path callback)))
-          (if (ein:notebooklist-list-get url-or-port)
-              (ein:notebook-open url-or-port path nil callback)
-            (ein:notebooklist-login url-or-port callback2)))
+  (let* ((proc (or (ein:process-dir-match filename)
+                   (when-let* ((true (file-truename filename))
+                               ((not (equal true filename)))
+                               (proc (ein:process-dir-match true)))
+                     (setq filename true)
+                     proc))))
+    (cond
+     (proc
+      (let* ((url-or-port (ein:process-url-or-port proc))
+             (path (ein:process-path proc filename)))
+        (if (ein:notebooklist-list-get url-or-port)
+            (ein:process--open url-or-port path filename callback no-pop)
+          (ein:notebooklist-login
+           url-or-port
+           (lambda (_buffer url-or-port)
+             (ein:process--open url-or-port path filename callback no-pop))))))
+     ((and (not ein:jupyter-use-containers) (ein:jupyter-server-process))
+      (user-error "%s is outside %s, the root of EIN's server; `M-x ein:stop' it first"
+                  filename (ein:jupyter-running-notebook-directory)))
+     ((not ein:jupyter-use-containers)
+      (let* ((root (expand-file-name ein:jupyter-implicit-root))
+             (path (ein:process--root-path root filename)))
+        (unless (ein:process--in-dir-p filename root)
+          (user-error "%s is outside `ein:jupyter-implicit-root' (%s)" filename root))
+        (message "Starting a Jupyter server for %s..." (file-name-nondirectory filename))
+        (ein:jupyter-server-start (executable-find ein:jupyter-server-command)
+                                  root nil
+                                  (lambda (_buffer url-or-port)
+                                    (ein:process--open url-or-port path filename callback no-pop))
+                                  nil ein:jupyter-implicit-server-args)))
+     (t
       (let* ((nbdir (read-directory-name "Notebook directory: "
                                          (ein:process-suitable-notebook-dir filename)))
              (path
@@ -192,27 +251,67 @@ CALLBACK with arity 2 (passed into `ein:notebook-open--callback')."
                                                               path* nil callback*))
                                          path callback)))
         (ein:jupyter-server-start (executable-find ein:jupyter-server-command)
-                                  nbdir nil callback2)))))
+                                  nbdir nil callback2))))))
+
+(defun ein:process--show-notebook (raw notebook)
+  "Show NOTEBOOK in the windows showing RAW, the buffer visiting its file.
+Pop to it when no window shows RAW."
+  (let ((buffer (ein:notebook-buffer notebook))
+        (windows (and (buffer-live-p raw) (get-buffer-window-list raw nil t))))
+    (if windows
+        (dolist (window windows)
+          (set-window-buffer window buffer))
+      (pop-to-buffer buffer))))
 
 (defun ein:process-open-notebook (&optional filename buffer-callback)
-  "When FILENAME is unspecified the variable `buffer-file-name'
-is used instead.  BUFFER-CALLBACK is called after notebook opened."
+  "Open FILENAME as a notebook.
+When FILENAME is unspecified the variable `buffer-file-name' is used
+instead.  A missing or empty FILENAME becomes a new, empty notebook.
+When the current buffer visits FILENAME, the notebook takes its
+windows.  BUFFER-CALLBACK is then called with that buffer."
   (interactive)
   (unless filename (setq filename buffer-file-name))
   (cl-assert filename nil "Not visiting a file")
-  (let ((callback2 (apply-partially (lambda (buffer buffer-callback* _notebook _created
-                                                    &rest _args)
-                                      (when (buffer-live-p buffer)
-                                        (funcall buffer-callback* buffer)))
-                                    (current-buffer) (or buffer-callback #'ignore))))
-    (ein:process-open-notebook* (expand-file-name filename) callback2)))
+  (when (file-remote-p filename)
+    (user-error "Remote notebooks open through `ein:login' to their server"))
+  (let* ((filename (expand-file-name filename))
+         (raw (and buffer-file-name
+                   (equal (expand-file-name buffer-file-name) filename)
+                   (current-buffer))))
+    (ein:process--ensure-notebook-file filename)
+    (ein:process-open-notebook*
+     filename
+     (lambda (notebook _created &rest _args)
+       (when raw
+         (ein:process--show-notebook raw notebook)
+         (when (and buffer-callback (buffer-live-p raw))
+           (funcall buffer-callback raw))))
+     raw)))
 
 (defun ein:process-find-file-callback ()
-  "A callback function for `find-file-hook' to open notebook."
+  "Open the ipynb file of the current buffer as a notebook."
   (interactive)
   (-when-let* ((filename buffer-file-name)
                (match-p (string-match-p "\\.ipynb$" filename)))
     (ein:process-open-notebook filename #'kill-buffer-if-not-modified)))
+
+;;;###autoload
+(defun ein:open (filename)
+  "Open the notebook FILENAME, wherever it is.
+Like opening a notebook in VS Code: there is no root to choose and
+no notebook list.  A Jupyter server is started when none can open
+FILENAME.  A new file name creates an empty notebook."
+  (interactive
+   (list (read-file-name "Open notebook: " nil nil nil nil
+                         (lambda (f) (or (file-directory-p f)
+                                         (string-suffix-p ".ipynb" f))))))
+  (let ((filename (expand-file-name filename)))
+    (unless (string-suffix-p ".ipynb" filename)
+      (setq filename (concat filename ".ipynb")))
+    (if-let* ((buffer (find-buffer-visiting filename)))
+        (with-current-buffer buffer
+          (ein:process-open-notebook filename #'kill-buffer-if-not-modified))
+      (ein:process-open-notebook filename))))
 
 (provide 'ein-process)
 
